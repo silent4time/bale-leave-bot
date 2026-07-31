@@ -157,12 +157,16 @@ ACTIVE_STATUSES = ("pending", "reviewing", "approved")
 
 @contextlib.contextmanager
 def _conn():
-    con = sqlite3.connect(config.DB_PATH)
+    con = sqlite3.connect(config.DB_PATH, timeout=30)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
+    con.execute("PRAGMA busy_timeout = 5000")
     try:
         yield con
         con.commit()
+    except Exception:
+        con.rollback()
+        raise
     finally:
         con.close()
 
@@ -231,11 +235,17 @@ def _migrate(con):
         if not _column_exists(con, "leaves", col):
             con.execute(f"ALTER TABLE leaves ADD COLUMN {col} {decl}")
 
-    # invites: region_id, is_senior
+    # regions: max_seniors (سقف تکنسین ارشد مخصوص همین منطقه؛ اگر NULL بود از تنظیم سراسری استفاده می‌شود)
+    if not _column_exists(con, "regions", "max_seniors"):
+        con.execute("ALTER TABLE regions ADD COLUMN max_seniors INTEGER")
+
+    # invites: region_id, is_senior, shift_index
     if not _column_exists(con, "invites", "region_id"):
         con.execute("ALTER TABLE invites ADD COLUMN region_id INTEGER")
     if not _column_exists(con, "invites", "is_senior"):
         con.execute("ALTER TABLE invites ADD COLUMN is_senior INTEGER NOT NULL DEFAULT 0")
+    if not _column_exists(con, "invites", "shift_index"):
+        con.execute("ALTER TABLE invites ADD COLUMN shift_index INTEGER")
 
     # اگر گروهی بدون منطقه مانده، منطقه پیش‌فرض بساز و وصل کن
     has_orphan = con.execute(
@@ -302,9 +312,13 @@ def get_shift_config():
         rows = con.execute(
             f"SELECT key, value FROM settings WHERE key IN ({placeholders})", required
         ).fetchall()
+        overrides_row = con.execute(
+            "SELECT value FROM settings WHERE key = 'shift_refs_json'"
+        ).fetchone()
     data = {r["key"]: r["value"] for r in rows}
     if not all(k in data for k in required):
         return None
+    overrides = json.loads(overrides_row["value"]) if overrides_row and overrides_row["value"] else {}
     return {
         "shift_count": int(data["shift_count"]),
         "cycle_length": int(data["cycle_length"]),
@@ -312,6 +326,8 @@ def get_shift_config():
         "ref_date": data["ref_date"],
         "ref_shift_index": int(data["ref_shift_index"]),
         "ref_slot_index": int(data["ref_slot_index"]),
+        # override اختصاصیِ هر شیفت (اختیاری): {"0": {"ref_date":.., "ref_slot_index":..}, ...}
+        "overrides": overrides,
     }
 
 
@@ -322,9 +338,48 @@ def save_shift_config(shift_count, cycle_length, labels, ref_date, ref_shift_ind
     set_setting("ref_date", ref_date)
     set_setting("ref_shift_index", ref_shift_index)
     set_setting("ref_slot_index", ref_slot_index)
+    set_setting("shift_refs_json", json.dumps({}))  # با پیکربندی مجدد کامل، اورراید‌های قبلی پاک می‌شوند
+
+
+def set_shift_override(shift_index: int, ref_date: str, ref_slot_index: int):
+    """تنظیم اختصاصیِ نقطه‌ی مرجع یک شیفت خاص (بدون تغییر بقیه‌ی شیفت‌ها).
+
+    خواندن و نوشتن در یک تراکنش تا با کش/هم‌زمانی خراب نشود.
+    """
+    shift_index = int(shift_index)
+    ref_slot_index = int(ref_slot_index)
+    ref_date = str(ref_date)
+    with _conn() as con:
+        row = con.execute(
+            "SELECT value FROM settings WHERE key = ?", ("shift_refs_json",)
+        ).fetchone()
+        raw = row["value"] if row else "{}"
+        try:
+            overrides = json.loads(raw) if raw else {}
+            if not isinstance(overrides, dict):
+                overrides = {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            overrides = {}
+        overrides[str(shift_index)] = {
+            "ref_date": ref_date,
+            "ref_slot_index": ref_slot_index,
+        }
+        payload = json.dumps(overrides, ensure_ascii=False)
+        con.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            ("shift_refs_json", payload),
+        )
+    try:
+        inv_settings()
+    except Exception:
+        pass
 
 
 # ============================================================== مناطق ====
+
+DEFAULT_REGION_GROUPS = ["مسئول شیفت", "تکنسین ارشد", "تکنسین", "اپراتور"]
+
 
 def create_region(name: str) -> Optional[int]:
     with _conn() as con:
@@ -333,7 +388,17 @@ def create_region(name: str) -> Optional[int]:
             rid = cur.lastrowid
         except sqlite3.IntegrityError:
             return None
+        # گروه‌های پیش‌فرض هر منطقه‌ی تازه‌ساخته‌شده (طبق درخواست: مسئول شیفت/ارشد/تکنسین/اپراتور)
+        for gname in DEFAULT_REGION_GROUPS:
+            try:
+                con.execute(
+                    "INSERT INTO groups (region_id, name, max_concurrent, color) VALUES (?, ?, ?, ?)",
+                    (rid, gname, 1, DEFAULT_GROUP_COLOR),
+                )
+            except sqlite3.IntegrityError:
+                pass
     inv_regions()
+    inv_group(None, rid)
     return rid
 
 
@@ -529,9 +594,10 @@ def touch_user_bale_info(user_id: int, bale_first_name, bale_username):
 
 def try_claim_admin(user_id: int):
     """
-    اولین نفری که ثبت‌نام کامل می‌کند مدیر می‌شود.
-    یک منطقه و گروه پیش‌فرض می‌سازد و او را به آن‌ها وصل می‌کند.
-    خروجی: (claimed: bool, group_id | None)
+    اولین نفری که ثبت‌نام کامل می‌کند مدیر می‌شود. برخلاف قبل، دیگر منطقه/گروه
+    پیش‌فرضی برایش ساخته نمی‌شود — طبق روند جدید، مدیر باید اول تنظیمات
+    تقویم/شیفت را کامل کند و بعد خودش مناطق کاری (و گروه‌های هرکدام) را بسازد.
+    خروجی: (claimed: bool, None)
     """
     con = sqlite3.connect(config.DB_PATH, isolation_level=None, timeout=10)
     con.row_factory = sqlite3.Row
@@ -541,46 +607,13 @@ def try_claim_admin(user_id: int):
         if exists:
             con.execute("COMMIT")
             return False, None
-
-        # منطقه پیش‌فرض
-        rrow = con.execute(
-            "SELECT id FROM regions WHERE name = ?", (DEFAULT_REGION_NAME,)
-        ).fetchone()
-        if rrow:
-            rid = rrow["id"]
-        else:
-            cur = con.execute(
-                "INSERT INTO regions (name) VALUES (?)", (DEFAULT_REGION_NAME,)
-            )
-            rid = cur.lastrowid
-
-        # گروه پیش‌فرض
-        grow = con.execute(
-            "SELECT id FROM groups WHERE name = ? AND region_id = ?",
-            (DEFAULT_GROUP_NAME, rid),
-        ).fetchone()
-        if grow:
-            gid = grow["id"]
-        else:
-            cur = con.execute(
-                "INSERT INTO groups (name, max_concurrent, region_id, color) VALUES (?, 1, ?, ?)",
-                (DEFAULT_GROUP_NAME, rid, DEFAULT_GROUP_COLOR),
-            )
-            gid = cur.lastrowid
-
         con.execute(
-            """
-            UPDATE users
-            SET is_admin = 1, approved = 1, role = 'snr',
-                region_id = ?, group_id = ?, is_senior = 0
-            WHERE user_id = ?
-            """,
-            (rid, gid, user_id),
+            "UPDATE users SET is_admin = 1, approved = 1 WHERE user_id = ?",
+            (user_id,),
         )
         con.execute("COMMIT")
-        inv_regions()
         inv_user(user_id)
-        return True, gid
+        return True, None
     except Exception:
         con.execute("ROLLBACK")
         raise
@@ -699,6 +732,24 @@ def set_max_seniors_per_region(n: int):
     set_setting("max_seniors_per_region", max(1, int(n)))
 
 
+def get_region_max_seniors(region_id: int) -> int:
+    """سقف تکنسین ارشدِ مخصوصِ همین منطقه؛ اگر تنظیم نشده بود از سقف سراسری استفاده می‌شود."""
+    region = get_region(region_id)
+    if region and region.get("max_seniors"):
+        return max(1, int(region["max_seniors"]))
+    return get_max_seniors_per_region()
+
+
+def set_region_max_seniors(region_id: int, n: Optional[int]):
+    """n=None یعنی این منطقه دوباره از سقف سراسری پیروی کند."""
+    with _conn() as con:
+        con.execute(
+            "UPDATE regions SET max_seniors = ? WHERE id = ?",
+            (max(1, int(n)) if n is not None else None, region_id),
+        )
+    inv_regions()
+
+
 def set_senior(user_id: int, is_senior: bool):
     """
     تعیین/لغو تکنسین ارشد. سقفِ تعداد ارشدها در سطح «منطقه» اعمال می‌شود
@@ -732,9 +783,15 @@ def set_senior(user_id: int, is_senior: bool):
                 (region_id, user_id),
             ).fetchall()
             cap_row = con.execute(
-                "SELECT value FROM settings WHERE key = 'max_seniors_per_region'"
+                "SELECT max_seniors FROM regions WHERE id = ?", (region_id,)
             ).fetchone()
-            cap = int(cap_row["value"]) if cap_row and cap_row["value"] else 2
+            if cap_row and cap_row["max_seniors"]:
+                cap = int(cap_row["max_seniors"])
+            else:
+                global_row = con.execute(
+                    "SELECT value FROM settings WHERE key = 'max_seniors_per_region'"
+                ).fetchone()
+                cap = int(global_row["value"]) if global_row and global_row["value"] else 2
             if len(existing) >= cap:
                 con.execute("COMMIT")
                 return "full", len(existing)
@@ -899,17 +956,18 @@ def remove_user_from_system(
 # ============================================================== دعوت‌ها ====
 
 def create_invite(token: str, role, group_id, created_by: int,
-                  region_id: Optional[int] = None, is_senior: int = 0):
+                  region_id: Optional[int] = None, is_senior: int = 0,
+                  shift_index: Optional[int] = None):
     if region_id is None and group_id is not None:
         g = get_group(group_id)
         region_id = g["region_id"] if g else None
     with _conn() as con:
         con.execute(
             """
-            INSERT INTO invites (token, role, group_id, region_id, is_senior, created_by)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO invites (token, role, group_id, region_id, is_senior, created_by, shift_index)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (token, role, group_id, region_id, is_senior, created_by),
+            (token, role, group_id, region_id, is_senior, created_by, shift_index),
         )
 
 

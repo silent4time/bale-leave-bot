@@ -2418,9 +2418,9 @@ async def cb_shift_own_settings_slot(callback: CallbackQuery, data: str):
 
     try:
         await run_db(db.set_shift_override, shift_index, today_str(), slot_idx)
-    except Exception:
+    except Exception as e:
         logger.exception("set_shift_override failed")
-        await callback.message.reply("خطا در ذخیره. لطفاً دوباره تلاش کنید.")
+        await callback.message.reply(f"خطا در ذخیره: {type(e).__name__}: {e}")
         return
 
     # تأیید از دیتابیس
