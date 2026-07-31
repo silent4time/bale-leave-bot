@@ -2205,57 +2205,108 @@ async def cb_nav_back_admin(callback: CallbackQuery):
     await callback.message.reply("بازگشت:", components=kb.menu_for_user(db_user))
 
 
+async def _safe_edit_or_reply(callback: CallbackQuery, text: str, components=None):
+    """ویرایش پیام؛ اگر شکست خورد، پیام جدید می‌فرستد تا کاربر بلاک نشود."""
+    try:
+        if components is not None:
+            await callback.message.edit(text, components=components)
+        else:
+            await callback.message.edit(text)
+    except Exception:
+        logger.exception("edit failed; falling back to reply")
+        if components is not None:
+            await callback.message.reply(text, components=components)
+        else:
+            await callback.message.reply(text)
+
+
 async def cb_cfg_first_day(callback: CallbackQuery, data: str):
-    """اولین روز کاری هر شیفت — سپس سقف مسئول و راهنمای کپی ساختار."""
+    """اولین روز کاری هر شیفت — وضعیت از دیتابیس + state خوانده می‌شود تا از دست نرود."""
     parts = data.split(":")
-    # cfgfirst:{shift_index}:{slot_index}
+    # انتظار: cfgfirst:{shift_index}:{slot_index}
     if len(parts) < 3:
-        # only cfgfirst:{shift_index} from keyboard prefix misuse
+        await callback.message.reply("دکمه نامعتبر است. دوباره از تنظیمات شیفت شروع کنید.")
         return
-    shift_index = int(parts[1])
-    slot_idx = int(parts[2])
-    state = states.get_state(callback.user.id)
-    if not state or state.get("action") != "cfg_first_day":
+    try:
+        shift_index = int(parts[1])
+        slot_idx = int(parts[2])
+    except ValueError:
+        await callback.message.reply("داده نامعتبر بود. لطفاً دوباره تلاش کنید.")
         return
-    first_days = dict(state.get("first_days") or {})
-    first_days[str(shift_index)] = slot_idx
-    # ذخیرهٔ override برای این شیفت
+
+    cfg = await run_db(db.get_shift_config)
+    if not cfg:
+        await callback.message.reply("چرخهٔ شیفت هنوز پیکربندی نشده. از تنظیمات شروع کنید.")
+        return
+
+    labels = cfg.get("labels") or []
+    shift_count = int(cfg["shift_count"])
+    if not labels or slot_idx < 0 or slot_idx >= len(labels):
+        await callback.message.reply("ردیف انتخاب‌شده معتبر نیست.")
+        return
+    if shift_index < 0 or shift_index >= shift_count:
+        await callback.message.reply("شماره شیفت نامعتبر است.")
+        return
+
+    # ذخیره در دیتابیس (منبع حقیقت)
     await run_db(db.set_shift_override, shift_index, today_str(), slot_idx)
 
-    letters = shift.shift_letters(state["shift_count"])
-    next_i = shift_index + 1
-    while next_i < state["shift_count"] and str(next_i) in first_days:
-        next_i += 1
-    if next_i < state["shift_count"]:
+    # پیشرفت را از overrides دیتابیس بساز
+    overrides = cfg.get("overrides") or {}
+    overrides = dict(overrides)
+    overrides[str(shift_index)] = {"ref_date": today_str(), "ref_slot_index": slot_idx}
+
+    state = states.get_state(callback.user.id) or {}
+    first_days = dict(state.get("first_days") or {})
+    # همگام‌سازی با overrides
+    for k, v in overrides.items():
+        if isinstance(v, dict) and "ref_slot_index" in v:
+            first_days[str(k)] = int(v["ref_slot_index"])
+    first_days[str(shift_index)] = slot_idx
+
+    letters = shift.shift_letters(shift_count)
+    letter = letters[shift_index] if shift_index < len(letters) else str(shift_index)
+    slot_name = labels[slot_idx]["name"]
+
+    # شیفت بعدی که هنوز تنظیم نشده
+    next_i = None
+    for i in range(shift_count):
+        if str(i) not in first_days:
+            next_i = i
+            break
+
+    if next_i is not None:
         states.set_state(
             callback.user.id,
             action="cfg_first_day",
-            shift_count=state["shift_count"],
-            cycle_length=state["cycle_length"],
-            labels=state["labels"],
-            first_day_index=next_i,
+            shift_count=shift_count,
+            labels=labels,
             first_days=first_days,
-            own_shift_index=state.get("own_shift_index"),
-            own_ref_slot=state.get("own_ref_slot"),
+            first_day_index=next_i,
         )
-        await callback.message.edit(
-            f"✅ شیفت {letters[shift_index]}: اولین روز کاری = «{state['labels'][slot_idx]['name']}»\n\n"
-            f"شیفت {letters[next_i]} — ردیفِ اولین روز کاری را انتخاب کنید:",
-            components=kb.slot_select_keyboard(state["labels"], f"cfgfirst:{next_i}"),
+        nxt_letter = letters[next_i] if next_i < len(letters) else str(next_i)
+        await _safe_edit_or_reply(
+            callback,
+            f"✅ شیفت {letter}: اولین روز کاری = «{slot_name}»\n"
+            f"پیشرفت: {len(first_days)} از {shift_count}\n\n"
+            f"شیفت {nxt_letter} — ردیفِ اولین روز کاری را انتخاب کنید:",
+            components=kb.slot_select_keyboard(labels, f"cfgfirst:{next_i}"),
         )
         return
 
-    # همهٔ شیفت‌ها انجام شد → تعداد مسئول
+    # همه انجام شد
     states.set_state(
         callback.user.id,
         action="cfg_leads_per_shift",
-        shift_count=state["shift_count"],
+        shift_count=shift_count,
         first_days=first_days,
     )
-    await callback.message.edit(
-        f"✅ اولین روز کاری همهٔ شیفت‌ها ثبت شد.\n\n"
+    await _safe_edit_or_reply(
+        callback,
+        f"✅ شیفت {letter}: اولین روز کاری = «{slot_name}»\n"
+        f"✅ اولین روز کاری همهٔ {shift_count} شیفت ثبت شد.\n\n"
         f"حالا «تعداد مسئول شیفت» را وارد کنید "
-        f"(سقف کل مسئولانی که می‌توانید منصوب کنید، مثلاً {state['shift_count']}):"
+        f"(سقف کل، مثلاً {shift_count}):",
     )
 
 
@@ -2270,8 +2321,9 @@ async def cb_cfgshift_ref(callback: CallbackQuery, data: str):
         db.save_shift_config, state["shift_count"], state["cycle_length"], state["labels"],
         ref_date, state["own_shift_index"], idx,
     )
+    # اورراید اختصاصی برای شیفت خود مدیر هم ذخیره شود
+    await run_db(db.set_shift_override, state["own_shift_index"], ref_date, idx)
     letters = shift.shift_letters(state["shift_count"])
-    # شیفت خود مدیر از قبل انتخاب شده
     first_days = {str(state["own_shift_index"]): idx}
     start_i = 0
     while start_i < state["shift_count"] and str(start_i) in first_days:

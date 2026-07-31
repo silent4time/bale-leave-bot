@@ -45,6 +45,69 @@ pause() {
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+# ---------------------------------------------------------------------------
+# Progress bar / status
+# ---------------------------------------------------------------------------
+progress_bar() {
+  # usage: progress_bar PERCENT "message"
+  local pct="$1"
+  local msg="${2:-}"
+  local width=24
+  if [ "$pct" -gt 100 ]; then pct=100; fi
+  if [ "$pct" -lt 0 ]; then pct=0; fi
+  local filled=$((pct * width / 100))
+  local empty=$((width - filled))
+  local bar=""
+  local i
+  for ((i=0; i<filled; i++)); do bar="${bar}#"; done
+  for ((i=0; i<empty; i++)); do bar="${bar}-"; done
+  printf "\r${C_TEAL}[%s] %3d%%${C_RESET} %s" "$bar" "$pct" "$msg"
+  if [ "$pct" -ge 100 ]; then
+    printf "\n"
+  fi
+}
+
+step_status() {
+  # usage: step_status CURRENT TOTAL "message"
+  local cur="$1"
+  local total="$2"
+  local msg="$3"
+  local pct=0
+  if [ "$total" -gt 0 ]; then
+    pct=$((cur * 100 / total))
+  fi
+  progress_bar "$pct" "$msg"
+}
+
+run_with_spinner() {
+  # usage: run_with_spinner "label" command args...
+  local label="$1"; shift
+  local log
+  log="$(mktemp)"
+  "$@" >"$log" 2>&1 &
+  local pid=$!
+  local spin='|/-\'
+  local i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    i=$(( (i + 1) % 4 ))
+    printf "\r${C_TEAL}[%c]${C_RESET} %s..." "${spin:$i:1}" "$label"
+    sleep 0.15
+  done
+  wait "$pid"
+  local rc=$?
+  if [ $rc -eq 0 ]; then
+    printf "\r${C_GREEN}[OK]${C_RESET} %s          \n" "$label"
+  else
+    printf "\r${C_RED}[FAIL]${C_RESET} %s          \n" "$label"
+    echo "---- last log lines ----"
+    tail -n 30 "$log" || true
+  fi
+  rm -f "$log"
+  return $rc
+}
+
+
+
 ensure_python() {
   if have_cmd python3; then
     return 0
@@ -162,14 +225,36 @@ do_install() {
         return 0
       fi
     else
-      info "Cloning repository into $target ..."
+      info "Downloading project files into $target ..."
       if [[ "$REPO_URL" == *"YOUR_USER"* ]]; then
         err "Please set REPO_URL to your real GitHub repo first."
         echo "  Example: export REPO_URL=https://github.com/myuser/bale-leave-bot.git"
         echo "  Or edit REPO_URL at the top of manage.sh"
         return 1
       fi
-      git clone --branch "$REPO_BRANCH" "$REPO_URL" "$target"
+      progress_bar 5 "Preparing download..."
+      # git clone with progress; pipe through while for status
+      if git clone --progress --branch "$REPO_BRANCH" "$REPO_URL" "$target" 2>&1 | while IFS= read -r line; do
+          case "$line" in
+            *Receiving\ objects:*)
+              p=$(echo "$line" | sed -n "s/.*Receiving objects: *\([0-9]\+\)%.*/\1/p")
+              [ -n "$p" ] && progress_bar "$p" "Downloading objects..."
+              ;;
+            *Resolving\ deltas:*)
+              p=$(echo "$line" | sed -n "s/.*Resolving deltas: *\([0-9]\+\)%.*/\1/p")
+              [ -n "$p" ] && progress_bar "$((50 + p/2))" "Resolving deltas..."
+              ;;
+            *)
+              ;;
+          esac
+        done
+      then
+        progress_bar 100 "Download complete"
+        ok "Repository cloned to $target"
+      else
+        err "git clone failed"
+        return 1
+      fi
     fi
   fi
 
@@ -186,8 +271,15 @@ do_install() {
   activate_venv "$target"
 
   info "Installing Python dependencies..."
-  pip install --upgrade pip >/dev/null 2>&1 || true
-  pip install -r requirements.txt
+  progress_bar 10 "Upgrading pip..."
+  run_with_spinner "Upgrading pip" pip install --upgrade pip || true
+  progress_bar 40 "Installing requirements..."
+  if run_with_spinner "Installing requirements" pip install -r requirements.txt; then
+    progress_bar 100 "Dependencies installed"
+  else
+    err "pip install failed"
+    return 1
+  fi
 
   # .env / token
   if [ ! -f ".env" ]; then
@@ -301,8 +393,15 @@ do_update() {
 
   activate_venv "$target"
   info "Updating Python dependencies..."
-  pip install --upgrade pip >/dev/null 2>&1 || true
-  pip install -r requirements.txt
+  progress_bar 20 "Upgrading pip..."
+  run_with_spinner "Upgrading pip" pip install --upgrade pip || true
+  progress_bar 50 "Updating requirements..."
+  if run_with_spinner "Updating requirements" pip install -r requirements.txt; then
+    progress_bar 100 "Dependencies updated"
+  else
+    err "pip install failed"
+    return 1
+  fi
 
   if [ -f "$VERSION_FILE" ]; then
     ok "Updated to version: $(cat "$VERSION_FILE")"

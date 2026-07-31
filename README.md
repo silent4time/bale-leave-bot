@@ -47,7 +47,6 @@ cd /home/bale_leave_bot
 ### ۲) اجرای منوی مدیریت
 
 ```bash
-cd /home/bale_leave_bot
 bash manage.sh
 ```
 
