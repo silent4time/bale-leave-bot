@@ -66,8 +66,11 @@ def build_calendar(
 
     for day in range(1, ndays + 1):
         date_str = jalali.parse_date_str(year, month, day)
-        shift_part = f"/{shift_short_labels[date_str]}" if date_str in shift_short_labels else ""
-        base = f"{day}{shift_part}"
+        # خانه بزرگ‌تر و خوانا: «۱۲/ص۱» یا فقط روز
+        if date_str in shift_short_labels and shift_short_labels[date_str]:
+            base = f"{day}/{shift_short_labels[date_str]}"
+        else:
+            base = f" {day} "
 
         if date_str < today_str:
             label = f"˙{base}"

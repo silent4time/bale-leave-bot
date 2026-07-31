@@ -51,9 +51,12 @@ run_with_spinner() {
   return $rc
 }
 
-echo "=============================================="
-echo "  Bale Leave Management Bot - Installer"
-echo "=============================================="
+printf '+------------------------------------------+\n'
+printf '|  Bale Leave Management Bot - Installer   |\n'
+ver="?"
+[ -f VERSION ] && ver=$(cat VERSION)
+printf '|  version %-31s |\n' "$ver"
+printf '+------------------------------------------+\n'
 
 if [ ! -f "bot.py" ]; then
   echo -e "${C_RED}[ERROR]${C_RESET} Run this script from inside the folder that contains bot.py."

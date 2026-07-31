@@ -420,27 +420,50 @@ def pending_users_keyboard(users) -> InlineKeyboardMarkup:
     return kb
 
 
-def all_users_keyboard(users, shift_mode: bool) -> InlineKeyboardMarkup:
+def all_users_keyboard(users, shift_mode: bool, letters: list = None) -> InlineKeyboardMarkup:
+    """یک دکمه برای هر نفر: نام (شیفت / منطقه / نقش)."""
     kb = InlineKeyboardMarkup()
     if not users:
         return kb
+    letters = letters or []
     row = 1
     for u in users:
         name = f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip() or str(u["user_id"])
+        # نقش
+        if u.get("is_admin"):
+            role = "مدیر"
+        elif u.get("is_shift_lead"):
+            role = "مسئول شیفت"
+        elif u.get("is_senior"):
+            role = "ارشد"
+        else:
+            from config import ROLE_LABELS
+            role = ROLE_LABELS.get(u.get("role"), u.get("role") or "عضو")
+        region = u.get("region_name") or u.get("group_name") or "-"
+        # اگر region_name نباشد از group_name استفاده می‌کنیم
+        if u.get("region_name"):
+            region = u["region_name"]
+        elif u.get("group_name"):
+            region = u["group_name"]
+        else:
+            region = "-"
+        shift_part = ""
+        if shift_mode:
+            si = u.get("shift_index")
+            if si is not None and 0 <= int(si) < len(letters):
+                shift_part = f"شیفت {letters[int(si)]}"
+            else:
+                shift_part = "شیفت؟"
+        parts = [p for p in (shift_part, region, role) if p]
+        label = f"👤 {name} ({' / '.join(parts)})"
+        # محدودیت طول دکمه
+        if len(label) > 60:
+            label = label[:57] + "…"
         kb.add(
-            InlineKeyboardButton(text=f"👤 {name}", callback_data=f"member_info:{u['user_id']}"),
+            InlineKeyboardButton(text=label, callback_data=f"member_info:{u['user_id']}"),
             row=row,
         )
         row += 1
-        if shift_mode:
-            kb.add(
-                InlineKeyboardButton(
-                    text=f"🔁 شیفت «{name}»",
-                    callback_data=f"setmembershift:{u['user_id']}",
-                ),
-                row=row,
-            )
-            row += 1
     return kb
 
 

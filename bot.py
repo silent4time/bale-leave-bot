@@ -866,21 +866,26 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
         return
 
     if text == kb.LEAD_BTN_MEMBERS:
-        lines = []
         users_acc = []
+        seen = set()
         for rid in region_ids:
             users = await run_db(db.list_all_active_users, rid)
-            users_acc.extend(users)
-            region = await run_db(db.get_region, rid)
-            rname = region["name"] if region else str(rid)
             for u in users:
-                lines.append(
-                    f"• [{rname}] {display_name(u)} — {u.get('group_name') or '-'} "
-                    f"{'(ارشد)' if u.get('is_senior') else ''}"
-                )
-        if not lines:
+                if u["user_id"] in seen:
+                    continue
+                seen.add(u["user_id"])
+                users_acc.append(u)
+        if not users_acc:
             await message.reply("عضوی در مناطق شما نیست.")
             return
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+        await message.reply(
+            f"اعضای مناطق شما ({len(users_acc)} نفر):",
+            components=kb.all_users_keyboard(users_acc, mode == "shift", letters=letters),
+        )
+        return
         mode = await run_db(db.get_calendar_mode)
         await message.reply(
             "اعضای مناطق شما:\n" + "\n".join(lines),
@@ -995,18 +1000,31 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
         if not users:
             await message.reply("عضوی در منطقه نیست.")
             return
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+        filtered = [u for u in users if not u.get("is_senior") or u["user_id"] == author.id]
+        await message.reply(
+            f"اعضای منطقه ({len(filtered)} نفر):",
+            components=kb.all_users_keyboard(filtered, mode == "shift", letters=letters),
+        )
+        return
+        users = await run_db(db.list_all_active_users, region_id)
+        if not users:
+            await message.reply("عضوی در منطقه نیست.")
+            return
         lines = [
             f"• {display_name(u)} — {u.get('group_name') or '-'} "
             f"{'(ارشد)' if u.get('is_senior') else ''}"
             for u in users if not u.get("is_senior") or u["user_id"] == author.id
         ]
         mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+        filtered = [u for u in users if not u.get("is_senior") or u["user_id"] == author.id]
         await message.reply(
-            "اعضای منطقه:\n" + "\n".join(lines),
-            components=kb.all_users_keyboard(
-                [u for u in users if not u.get("is_senior") or u["user_id"] == author.id],
-                mode == "shift",
-            ),
+            f"اعضای منطقه ({len(filtered)} نفر):",
+            components=kb.all_users_keyboard(filtered, mode == "shift", letters=letters),
         )
         return
 
@@ -1055,25 +1073,12 @@ async def show_all_users(message: Message):
     mode = await run_db(db.get_calendar_mode)
     cfg = await run_db(db.get_shift_config) if mode == "shift" else None
     letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
-    lines = []
-    for u in users:
-        role_label = config.ROLE_LABELS.get(u["role"], "-")
-        shift_txt = ""
-        if mode == "shift":
-            if u["shift_index"] is not None and u["shift_index"] < len(letters):
-                shift_txt = f" — شیفت: {letters[u['shift_index']]}"
-            else:
-                shift_txt = " — شیفت: تعیین‌نشده"
-        lines.append(
-            f"• {display_name(u)} ({u.get('personnel_number') or '-'}) — {role_label} "
-            f"— گروه: {u['group_name'] or '-'}{shift_txt}"
-        )
-    keyboard = kb.all_users_keyboard(users, mode == "shift")
-    text = "لیست اعضا:\n" + "\n".join(lines)
-    if keyboard:
-        await message.reply(text, components=keyboard)
-    else:
-        await message.reply(text)
+    # یک‌بار برای هر نفر: نام (شیفت / منطقه / نقش)
+    keyboard = kb.all_users_keyboard(users, mode == "shift", letters=letters)
+    await message.reply(
+        f"لیست اعضا ({len(users)} نفر) — برای مدیریت روی نام بزنید:",
+        components=keyboard,
+    )
 
 
 def format_admin_leave_text(requester: dict, leave: dict, group_name) -> str:
@@ -1108,20 +1113,21 @@ async def _recipients_for_leave_request(requester: dict) -> list:
         if not recipients:
             recipients = await run_db(db.list_admin_ids)
     else:
-        # به تکنسین ارشدِ همان گروه (هر گروه فقط یک ارشد دارد)
-        gid = requester.get("group_id")
+        # مدیریت مرخصی منطقه با تکنسین ارشد(های) همان منطقه
         rid = requester.get("region_id")
-        if gid:
-            users = await run_db(db.list_all_active_users, rid) if rid else []
+        if rid:
+            users = await run_db(db.list_all_active_users, rid) or []
             for u in users:
-                if u.get("is_senior") and u.get("group_id") == gid and u["user_id"] != requester.get("user_id"):
+                if u.get("is_senior") and u["user_id"] != requester.get("user_id"):
                     recipients.append(u["user_id"])
         if not recipients:
-            # fallback: مسئولان شیفت منطقه (اگر گروه هنوز ارشد ندارد)
+            # fallback: مسئولان شیفت منطقه
             leads = await run_db(db.list_shift_leads)
             for lead in leads:
                 if rid in [r["id"] for r in lead.get("regions") or []]:
                     recipients.append(lead["user_id"])
+        if not recipients:
+            recipients = await run_db(db.list_admin_ids)
     return list(dict.fromkeys(recipients))
 
 

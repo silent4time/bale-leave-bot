@@ -594,10 +594,10 @@ show_banner() {
     ver="$(cat "$VERSION_FILE")"
   fi
   echo -e "${C_GOLD}"
-  echo "  ╔══════════════════════════════════════════╗"
-  echo "  ║   Bale Leave Management Bot — Manager    ║"
-  echo "  ║              version $ver                 ║"
-  echo "  ╚══════════════════════════════════════════╝"
+  printf '  +------------------------------------------+\n'
+  printf '  |  Bale Leave Management Bot — Manager     |\n'
+  printf '  |  version %-31s |\n' "$ver"
+  printf '  +------------------------------------------+\n'
   echo -e "${C_RESET}"
   if [ -n "$target" ]; then
     echo -e "  Install path: ${C_DIM}$target${C_RESET}"
