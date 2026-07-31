@@ -13,7 +13,7 @@ set -e
 # ---------------------------------------------------------------------------
 REPO_URL="${REPO_URL:-https://github.com/silent4time/bale-leave-bot.git}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/bale-leave-bot}"
+INSTALL_DIR="${INSTALL_DIR:-/home/bale_leave_bot}"
 SERVICE_NAME="bale-leave-bot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 VERSION_FILE="VERSION"

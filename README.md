@@ -38,8 +38,10 @@
 ### ۱) کلون کردن پروژه
 
 ```bash
-git clone https://github.com/silent4time/bale-leave-bot.git
-cd bale-leave-bot
+sudo mkdir -p /home/bale_leave_bot
+sudo chown "$USER":"$USER" /home/bale_leave_bot
+git clone https://github.com/silent4time/bale-leave-bot.git /home/bale_leave_bot
+cd /home/bale_leave_bot
 ```
 
 ### ۲) اجرای منوی مدیریت
@@ -87,7 +89,7 @@ bash manage.sh
 همیشه از داخل پوشهٔ پروژه:
 
 ```bash
-cd ~/bale-leave-bot
+cd /home/bale_leave_bot
 bash manage.sh
 ```
 
@@ -106,7 +108,7 @@ bash manage.sh
 اگر سرویس ۲۴ساعته نساختید:
 
 ```bash
-cd ~/bale-leave-bot
+cd /home/bale_leave_bot
 source venv/bin/activate
 python3 bot.py
 ```
@@ -146,7 +148,7 @@ sudo systemctl restart bale-leave-bot
 ## آپدیت به نسخهٔ جدید
 
 ```bash
-cd ~/bale-leave-bot
+cd /home/bale_leave_bot
 bash manage.sh
 ```
 
@@ -158,7 +160,7 @@ bash manage.sh
 ## حذف کامل
 
 ```bash
-cd ~/bale-leave-bot
+cd /home/bale_leave_bot
 bash manage.sh
 ```
 
@@ -208,7 +210,7 @@ BALE_BOT_TOKEN=123456:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ---
 
-## پشتیبانی و مشارکت
+## پشتیبانی
 
 ریپازیتوری: [github.com/silent4time/bale-leave-bot](https://github.com/silent4time/bale-leave-bot)
 
@@ -216,4 +218,4 @@ BALE_BOT_TOKEN=123456:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ---
 
-**نسخهٔ فعلی:** ببینید فایل `VERSION`
+**نسخهٔ فعلی:** فایل `VERSION` را ببینید.
