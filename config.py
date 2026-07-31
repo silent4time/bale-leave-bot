@@ -15,5 +15,6 @@ ROLE_LABELS = {
     "op": "اپراتور",
     "tech": "تکنسین",
     "snr": "ارشد",
+    "lead": "مسئول شیفت",
 }
 ROLE_CODES = {v: k for k, v in ROLE_LABELS.items()}

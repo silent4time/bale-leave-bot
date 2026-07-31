@@ -337,14 +337,46 @@ def groups_edit_keyboard(groups) -> InlineKeyboardMarkup:
 
 
 
+
+def nav_row_keyboard(*, back_callback: str = None, back_label: str = "↩️ بازگشت",
+                     show_main: bool = False) -> InlineKeyboardMarkup:
+    """ردیف ناوبری زیرمنو. show_main فقط وقتی لازم است True شود."""
+    kb = InlineKeyboardMarkup()
+    row = 1
+    if back_callback:
+        kb.add(InlineKeyboardButton(text=back_label, callback_data=back_callback), row=row)
+        row += 1
+    if show_main:
+        kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=row)
+    return kb
+
+
+def after_action_keyboard(*, add_callback: str = None, add_label: str = "➕ مورد دیگر",
+                          back_callback: str = "nav_back_admin",
+                          back_label: str = "↩️ بازگشت",
+                          show_main: bool = False) -> InlineKeyboardMarkup:
+    """بعد از یک عمل: افزودن دوباره + بازگشت (+ منوی اصلی فقط در صورت نیاز)."""
+    kb = InlineKeyboardMarkup()
+    row = 1
+    if add_callback:
+        kb.add(InlineKeyboardButton(text=add_label, callback_data=add_callback), row=row)
+        row += 1
+    kb.add(InlineKeyboardButton(text=back_label, callback_data=back_callback), row=row)
+    row += 1
+    if show_main:
+        kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=row)
+    return kb
+
 def after_add_keyboard(*, add_callback: str, add_label: str = "➕ افزودن مورد دیگر",
                        back_callback: str = "nav_back_admin",
-                       back_label: str = "↩️ بازگشت") -> InlineKeyboardMarkup:
-    """بعد از هر افزودن موفق: افزودن دوباره + بازگشت + منوی اصلی."""
+                       back_label: str = "↩️ بازگشت",
+                       show_main: bool = False) -> InlineKeyboardMarkup:
+    """بعد از هر افزودن موفق: افزودن دوباره + بازگشت (+ منوی اصلی فقط اگر لازم)."""
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton(text=add_label, callback_data=add_callback), row=1)
     kb.add(InlineKeyboardButton(text=back_label, callback_data=back_callback), row=2)
-    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=3)
+    if show_main:
+        kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=3)
     return kb
 
 

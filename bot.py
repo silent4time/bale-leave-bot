@@ -307,11 +307,45 @@ async def finalize_registration(message: Message, author, token):
 
     if token:
         invite = await run_db(db.get_invite, token)
-        if invite and invite["role"] and invite["group_id"]:
+        # دعوت مسئول شیفت (چند منطقه، بدون گروه زیرمنطقه)
+        if invite and (invite.get("is_shift_lead") or invite.get("role") == "lead"):
             await run_db(db.increment_invite_use, token)
-            await run_db(db.approve_user, uid, invite["role"], invite["group_id"], invite.get("shift_index"))
+            region_ids = invite.get("region_ids") or []
+            if not region_ids and invite.get("region_id"):
+                region_ids = [invite["region_id"]]
+            try:
+                await run_db(
+                    db.appoint_shift_lead, uid, region_ids, invite.get("shift_index")
+                )
+            except ValueError as e:
+                await message.reply(fa_error(e))
+                return
+            names = []
+            for rid in region_ids:
+                r = await run_db(db.get_region, rid)
+                if r:
+                    names.append(r["name"])
+            shift_txt = ""
+            if invite.get("shift_index") is not None:
+                cfg = await run_db(db.get_shift_config)
+                if cfg:
+                    letters = shift.shift_letters(cfg["shift_count"])
+                    if invite["shift_index"] < len(letters):
+                        shift_txt = f"\nشیفت: {letters[invite['shift_index']]}"
+            await message.reply(
+                f"✅ ثبت‌نام شما تکمیل شد.\nنقش: مسئول شیفت (سرگروه مناطق){shift_txt}\n"
+                f"مناطق تحت مدیریت: {', '.join(names) or '-'}",
+                components=kb.shift_lead_menu(),
+            )
+            return
+        if invite and invite.get("role") and invite.get("group_id"):
+            await run_db(db.increment_invite_use, token)
+            role = invite["role"]
+            if role == "lead":
+                role = "tech"
+            await run_db(db.approve_user, uid, role, invite["group_id"], invite.get("shift_index"))
             group = await run_db(db.get_group, invite["group_id"])
-            region = await run_db(db.get_region, group["region_id"]) if group.get("region_id") else None
+            region = await run_db(db.get_region, group["region_id"]) if group and group.get("region_id") else None
             role_label = config.ROLE_LABELS.get(invite["role"], invite["role"])
             shift_txt = ""
             if invite.get("shift_index") is not None:
@@ -322,7 +356,7 @@ async def finalize_registration(message: Message, author, token):
                         shift_txt = f"\nشیفت: {letters[invite['shift_index']]}"
             await message.reply(
                 f"✅ ثبت‌نام شما تکمیل و عضویتتان تایید شد.\nنقش: {role_label}{shift_txt}\n"
-                f"منطقه: {region['name'] if region else '-'}\nگروه: {group['name']}",
+                f"منطقه: {region['name'] if region else '-'}\nگروه: {group['name'] if group else '-'}",
                 components=kb.user_menu(),
             )
             return
@@ -994,7 +1028,7 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
         if not region_id:
             await message.reply("منطقه کاری شما مشخص نیست.")
             return
-        groups = await run_db(db.list_groups, region_id)
+        groups = await run_db(db.list_member_groups, region_id)
         if not groups:
             await message.reply("گروهی در منطقه نیست.")
             return
@@ -1356,6 +1390,15 @@ async def on_callback(callback: CallbackQuery):
             await cb_invite_region(callback, data)
         elif data.startswith("invgroup:"):
             await cb_invite_group(callback, data)
+        elif data.startswith("invlead_tog:"):
+            await cb_invlead_toggle(callback, data)
+        elif data == "invlead_done" or data.startswith("invlead_done"):
+            await cb_invlead_done(callback, data)
+        elif data == "nav_invite_again":
+            await callback.message.reply(
+                "نقش فرد دعوت‌شده را انتخاب کنید:",
+                components=kb.role_select_keyboard("invrole"),
+            )
         elif data.startswith("editcap:"):
             await cb_edit_capacity(callback, data)
         elif data.startswith("approve:"):
@@ -1935,8 +1978,27 @@ async def _show_invite_region_picker(callback: CallbackQuery, role_code, shift_c
         all_regions = await run_db(db.list_regions)
         regions = [r for r in all_regions if r["id"] in allowed]
     if not regions:
-        await callback.message.edit("هیچ منطقه‌ای در محدوده‌ی دسترسی شما نیست. ابتدا یک منطقه بسازید.")
+        await callback.message.edit(
+            "هیچ منطقه‌ای در محدوده‌ی دسترسی شما نیست. ابتدا یک منطقه بسازید.",
+            components=kb.nav_row_keyboard(back_callback="nav_back_admin"),
+        )
         return
+
+    # مسئول شیفت: انتخاب چندمنطقه‌ای (سرگروه مناطق)
+    if role_code == "lead":
+        states.set_state(
+            callback.user.id,
+            action="inv_lead_regions",
+            role_code=role_code,
+            shift_code=str(shift_code),
+            selected=[],
+        )
+        await callback.message.edit(
+            "مناطق تحت مدیریت این مسئول شیفت را انتخاب کنید (می‌توانید چند مورد را تیک بزنید):",
+            components=kb.multi_region_toggle_keyboard(regions, set(), "invlead_tog", done_callback="invlead_done"),
+        )
+        return
+
     await callback.message.edit(
         "منطقه‌ی کاریِ افرادی که با این لینک عضو می‌شوند را انتخاب کنید:",
         components=kb.region_select_keyboard(regions, f"invregion:{role_code}:{shift_code}"),
@@ -1955,13 +2017,92 @@ async def cb_invite_region(callback: CallbackQuery, data: str):
     ):
         await callback.message.edit("❌ این منطقه خارج از محدوده‌ی دسترسی شماست.")
         return
-    groups = await run_db(db.list_groups, region_id)
+    groups = await run_db(db.list_member_groups, region_id)
     if not groups:
-        await callback.message.edit("این منطقه هنوز گروهی ندارد. ابتدا یک گروه بسازید.")
+        await callback.message.edit(
+            "این منطقه هنوز گروهی ندارد. ابتدا یک گروه بسازید.",
+            components=kb.nav_row_keyboard(back_callback="nav_back_admin"),
+        )
         return
     await callback.message.edit(
         "گروهِ کاریِ افرادی که با این لینک عضو می‌شوند را انتخاب کنید:",
         components=kb.group_select_keyboard(groups, f"invgroup:{role_code}:{shift_code}", allow_none=False),
+    )
+
+
+
+async def cb_invlead_toggle(callback: CallbackQuery, data: str):
+    """تیک زدن/برداشتن منطقه برای دعوت مسئول شیفت."""
+    rid = int(data.split(":")[1])
+    st = states.get_state(callback.user.id) or {}
+    if st.get("action") != "inv_lead_regions":
+        await callback.message.reply("جلسه منقضی شده؛ دوباره از لینک دعوت شروع کنید.")
+        return
+    selected = set(st.get("selected") or [])
+    if rid in selected:
+        selected.discard(rid)
+    else:
+        selected.add(rid)
+    states.set_state(
+        callback.user.id,
+        action="inv_lead_regions",
+        role_code=st.get("role_code", "lead"),
+        shift_code=st.get("shift_code", "none"),
+        selected=list(selected),
+    )
+    regions = await run_db(db.list_regions)
+    await callback.message.edit(
+        "مناطق تحت مدیریت این مسئول شیفت را انتخاب کنید:",
+        components=kb.multi_region_toggle_keyboard(regions, selected, "invlead_tog", done_callback="invlead_done"),
+    )
+
+
+async def cb_invlead_done(callback: CallbackQuery, data: str):
+    """ساخت لینک دعوت مسئول شیفت با مناطق انتخاب‌شده."""
+    st = states.get_state(callback.user.id) or {}
+    if st.get("action") != "inv_lead_regions":
+        await callback.message.reply("جلسه منقضی شده؛ دوباره از لینک دعوت شروع کنید.")
+        return
+    selected = st.get("selected") or []
+    if not selected:
+        await callback.message.reply("حداقل یک منطقه انتخاب کنید.")
+        return
+    shift_code = st.get("shift_code", "none")
+    shift_index = None if shift_code == "none" else int(shift_code)
+    token = secrets.token_urlsafe(6)
+    await run_db(
+        db.create_invite, token, "lead", None, callback.user.id,
+        None, 0, shift_index, 1, selected,
+    )
+    states.clear_state(callback.user.id)
+
+    names = []
+    for rid in selected:
+        r = await run_db(db.get_region, rid)
+        if r:
+            names.append(r["name"])
+    shift_txt = "بدون شیفت مشخص"
+    if shift_index is not None:
+        cfg = await run_db(db.get_shift_config)
+        if cfg:
+            letters = shift.shift_letters(cfg["shift_count"])
+            if shift_index < len(letters):
+                shift_txt = f"شیفت {letters[shift_index]}"
+    username = _bot_username["value"]
+    link_line = f"https://ble.ir/{username}?start={token}\n" if username else ""
+    await callback.message.edit(
+        "✅ لینک دعوت مسئول شیفت ساخته شد.\n"
+        f"نقش: مسئول شیفت (سرگروه مناطق)\n{shift_txt}\n"
+        f"مناطق: {', '.join(names) or '-'}\n\n"
+        f"{link_line}"
+        f"کد دعوت: `{token}`\n\n"
+        "فرد جدید با /start و این کد، به‌صورت خودکار مسئول شیفت مناطق بالا می‌شود.",
+        components=kb.after_action_keyboard(
+            add_callback="nav_invite_again",
+            add_label="🔗 ساخت لینک دیگر",
+            back_callback="nav_back_admin",
+            show_main=False,
+        ),
     )
 
 

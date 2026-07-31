@@ -246,6 +246,10 @@ def _migrate(con):
         con.execute("ALTER TABLE invites ADD COLUMN is_senior INTEGER NOT NULL DEFAULT 0")
     if not _column_exists(con, "invites", "shift_index"):
         con.execute("ALTER TABLE invites ADD COLUMN shift_index INTEGER")
+    if not _column_exists(con, "invites", "is_shift_lead"):
+        con.execute("ALTER TABLE invites ADD COLUMN is_shift_lead INTEGER NOT NULL DEFAULT 0")
+    if not _column_exists(con, "invites", "region_ids_json"):
+        con.execute("ALTER TABLE invites ADD COLUMN region_ids_json TEXT")
 
     # اگر گروهی بدون منطقه مانده، منطقه پیش‌فرض بساز و وصل کن
     has_orphan = con.execute(
@@ -378,7 +382,8 @@ def set_shift_override(shift_index: int, ref_date: str, ref_slot_index: int):
 
 # ============================================================== مناطق ====
 
-DEFAULT_REGION_GROUPS = ["مسئول شیفت", "تکنسین ارشد", "تکنسین", "اپراتور"]
+DEFAULT_REGION_GROUPS = ["تکنسین ارشد", "تکنسین", "اپراتور"]
+# گروه «مسئول شیفت» زیر منطقه ساخته نمی‌شود؛ مسئول شیفت سرگروه مناطق است (shift_lead_regions).
 
 
 def create_region(name: str) -> Optional[int]:
@@ -955,26 +960,59 @@ def remove_user_from_system(
 
 # ============================================================== دعوت‌ها ====
 
+
+def list_member_groups(region_id: Optional[int] = None) -> list:
+    """گروه‌های قابل‌اختصاص به عضو عادی — بدون گروه «مسئول شیفت»."""
+    groups = list_groups(region_id)
+    return [g for g in groups if (g.get("name") or "") != "مسئول شیفت"]
+
 def create_invite(token: str, role, group_id, created_by: int,
                   region_id: Optional[int] = None, is_senior: int = 0,
-                  shift_index: Optional[int] = None):
+                  shift_index: Optional[int] = None,
+                  is_shift_lead: int = 0, region_ids: Optional[list] = None):
+    """ساخت لینک دعوت.
+    برای مسئول شیفت: is_shift_lead=1 و region_ids=[...]؛ group_id معمولاً None.
+    """
     if region_id is None and group_id is not None:
         g = get_group(group_id)
         region_id = g["region_id"] if g else None
+    if region_ids is None:
+        region_ids_json = None
+    else:
+        region_ids_json = json.dumps([int(x) for x in region_ids])
+        if region_id is None and region_ids:
+            region_id = int(region_ids[0])
     with _conn() as con:
         con.execute(
             """
-            INSERT INTO invites (token, role, group_id, region_id, is_senior, created_by, shift_index)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO invites (
+                token, role, group_id, region_id, is_senior, created_by,
+                shift_index, is_shift_lead, region_ids_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (token, role, group_id, region_id, is_senior, created_by, shift_index),
+            (
+                token, role, group_id, region_id, int(bool(is_senior)), created_by,
+                shift_index, int(bool(is_shift_lead)), region_ids_json,
+            ),
         )
 
 
 def get_invite(token: str):
     with _conn() as con:
         row = con.execute("SELECT * FROM invites WHERE token = ?", (token,)).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        d = dict(row)
+        raw = d.get("region_ids_json")
+        if raw:
+            try:
+                d["region_ids"] = [int(x) for x in json.loads(raw)]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                d["region_ids"] = []
+        else:
+            d["region_ids"] = [d["region_id"]] if d.get("region_id") else []
+        return d
 
 
 def increment_invite_use(token: str):
@@ -1477,8 +1515,7 @@ def appoint_shift_lead(
     u = get_user(user_id)
     if not u:
         raise ValueError("user not found")
-    if not u.get("approved") and not u.get("is_admin"):
-        raise ValueError("user not approved")
+    # approved بودن الزامی نیست؛ انتصاب خودش approved=1 می‌گذارد (مسیر لینک دعوت)
 
     region_ids = list(dict.fromkeys(int(x) for x in region_ids))  # unique, order-preserving
     if not region_ids:
