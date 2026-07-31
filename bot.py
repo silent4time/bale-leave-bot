@@ -291,27 +291,38 @@ async def handle_registration_step(message: Message, author, text: str, state: d
 
 async def finalize_registration(message: Message, author, token):
     uid = author.id
-    claimed, gid = await run_db(db.try_claim_admin, uid)
+    claimed, _ = await run_db(db.try_claim_admin, uid)
     if claimed:
-        group = await run_db(db.get_group, gid)
+        mode = await run_db(db.get_calendar_mode)
         await message.reply(
-            "🎉 تبریک! شما به‌عنوان اولین کاربری که ثبت‌نام را تکمیل کرد، مدیر ربات شدید.\n"
-            f"یک گروه پیش‌فرض به نام «{group['name']}» ساخته شد و شما عضو آن هستید.\n"
-            "از منوی زیر می‌توانید گروه‌های بیشتری بسازید، اعضا را تایید کنید و مرخصی‌ها را مدیریت کنید.",
-            components=kb.admin_menu(),
+            "🎉 تبریک! شما به‌عنوان اولین کاربری که ثبت‌نام را تکمیل کرد، مدیر ربات شدید.\n\n"
+            "قبل از هر کار دیگری، لازم است نوع تقویم را مشخص کنید (روزکار یا شیفتی؛ اگر شیفتی را "
+            "انتخاب کنید، مراحل تعریف شیفت هم همین‌جا از شما پرسیده می‌شود).\n"
+            "بعد از این مرحله، از منوی مدیر می‌توانید مناطق کاری بسازید — هر منطقه به‌طور خودکار "
+            "با گروه‌های «مسئول شیفت / تکنسین ارشد / تکنسین / اپراتور» ساخته می‌شود و می‌توانید "
+            "همان‌جا آن‌ها را ویرایش، اضافه یا حذف کنید."
         )
+        await message.reply("نوع تقویم را انتخاب کنید:", components=kb.settings_keyboard(mode, is_admin=True))
         return
 
     if token:
         invite = await run_db(db.get_invite, token)
         if invite and invite["role"] and invite["group_id"]:
             await run_db(db.increment_invite_use, token)
-            await run_db(db.approve_user, uid, invite["role"], invite["group_id"], None)
+            await run_db(db.approve_user, uid, invite["role"], invite["group_id"], invite.get("shift_index"))
             group = await run_db(db.get_group, invite["group_id"])
+            region = await run_db(db.get_region, group["region_id"]) if group.get("region_id") else None
             role_label = config.ROLE_LABELS.get(invite["role"], invite["role"])
+            shift_txt = ""
+            if invite.get("shift_index") is not None:
+                cfg = await run_db(db.get_shift_config)
+                if cfg:
+                    letters = shift.shift_letters(cfg["shift_count"])
+                    if invite["shift_index"] < len(letters):
+                        shift_txt = f"\nشیفت: {letters[invite['shift_index']]}"
             await message.reply(
-                f"✅ ثبت‌نام شما تکمیل و عضویتتان تایید شد.\nنقش: {role_label}\nگروه: {group['name']}\n"
-                "(اگر تقویم به‌صورت شیفتی باشد، مدیر باید شیفت شما را هم از «👥 لیست اعضا» تعیین کند.)",
+                f"✅ ثبت‌نام شما تکمیل و عضویتتان تایید شد.\nنقش: {role_label}{shift_txt}\n"
+                f"منطقه: {region['name'] if region else '-'}\nگروه: {group['name']}",
                 components=kb.user_menu(),
             )
             return
@@ -431,9 +442,23 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         gid = await run_db(db.create_group, name, capacity, region_id)
         states.clear_state(author.id)
         if gid is None:
-            await message.reply(f"⚠️ گروهی با نام «{name}» از قبل وجود دارد.", components=kb.admin_menu())
+            await message.reply(
+                f"⚠️ گروهی با نام «{name}» از قبل وجود دارد.",
+                components=kb.after_add_keyboard(
+                    add_callback=f"region_addgroup:{region_id}" if region_id else "nav_back_admin",
+                    add_label="➕ ساخت گروه دیگر",
+                    back_callback=f"region_groups:{region_id}" if region_id else "nav_back_admin",
+                ),
+            )
         else:
-            await message.reply(f"✅ گروه «{name}» با ظرفیت هم‌زمان {capacity} نفر ساخته شد.", components=kb.admin_menu())
+            await message.reply(
+                f"✅ گروه «{name}» با ظرفیت هم‌زمان {capacity} نفر ساخته شد.",
+                components=kb.after_add_keyboard(
+                    add_callback=f"region_addgroup:{region_id}" if region_id else "nav_back_admin",
+                    add_label="➕ ساخت گروه دیگر",
+                    back_callback=f"region_groups:{region_id}" if region_id else "nav_back_admin",
+                ),
+            )
         return True
 
     if action == "rename_group":
@@ -549,9 +574,15 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         rid = await run_db(db.create_region, name)
         states.clear_state(author.id)
         if rid is None:
-            await message.reply(f"منطقه‌ای با نام «{name}» از قبل هست.", components=kb.admin_menu())
+            await message.reply(
+                f"منطقه‌ای با نام «{name}» از قبل هست.",
+                components=kb.after_add_keyboard(add_callback="region_new", add_label="➕ ساخت منطقه جدید"),
+            )
         else:
-            await message.reply(f"✅ منطقه «{name}» ساخته شد.", components=kb.admin_menu())
+            await message.reply(
+                f"✅ منطقه «{name}» ساخته شد.",
+                components=kb.after_add_keyboard(add_callback="region_new", add_label="➕ ساخت منطقه جدید"),
+            )
         return True
 
     if action == "set_max_shift_leads":
@@ -563,7 +594,35 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         states.clear_state(author.id)
         await message.reply(
             f"✅ سقف مسئول شیفت: {t}",
-            components=kb.admin_menu(),
+            components=kb.after_add_keyboard(
+                add_callback="settings_shiftleads",
+                add_label="👔 مدیریت مسئولان شیفت",
+            ),
+        )
+        return True
+
+    if action == "cfg_leads_per_shift":
+        t = text.strip()
+        if not t.isdigit() or int(t) < 0:
+            await message.reply("یک عدد صحیح ≥ ۰ وارد کنید:")
+            return True
+        n = int(t)
+        await run_db(db.set_max_shift_leads, n)
+        sc = state.get("shift_count") or 1
+        states.clear_state(author.id)
+        await message.reply(
+            f"✅ سقف مسئول شیفت روی {n} تنظیم شد.\n\n"
+            "حالا مناطق را بسازید و برای هر مسئول شیفت مناطق تحت مدیریت را مشخص کنید.\n"
+            "پس از پیکربندی ساختار برای یک شیفت (مناطق + گروه‌ها)، "
+            "همان الگو برای بقیه‌ی شیفت‌ها قابل استفاده است — "
+            "مناطق و گروه‌ها مشترک‌اند و فقط اعضای هر شیفت فرق می‌کنند.\n\n"
+            "از دکمه‌های زیر ادامه دهید:",
+            components=kb.after_add_keyboard(
+                add_callback="region_new",
+                add_label="➕ ساخت منطقه",
+                back_callback="settings_shiftleads",
+                back_label="👔 انتصاب مسئولان شیفت",
+            ),
         )
         return True
 
@@ -578,6 +637,19 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
             f"✅ سقف تکنسین ارشد در هر منطقه: {t} نفر",
             components=kb.admin_menu(),
         )
+        return True
+
+    if action == "set_region_max_seniors":
+        t = text.strip()
+        if not t.isdigit():
+            await message.reply("یک عدد صحیح وارد کنید (0 = پیروی از سقف سراسری):")
+            return True
+        rid = state["region_id"]
+        n = int(t)
+        await run_db(db.set_region_max_seniors, rid, None if n == 0 else n)
+        states.clear_state(author.id)
+        cur = await run_db(db.get_region_max_seniors, rid)
+        await message.reply(f"✅ سقف ارشد این منطقه: {cur} نفر", components=kb.admin_menu())
         return True
 
     if action == "appoint_sl_uid":
@@ -710,9 +782,10 @@ async def handle_admin_menu(message: Message, author, text: str):
 
     if text == kb.ADMIN_BTN_SETTINGS:
         mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
         await message.reply(
             "تنظیمات ربات (مناطق، گروه‌ها، مسئولان شیفت، جایگزینی مدیر و پیکربندی‌های دیگر همه اینجاست):",
-            components=kb.settings_keyboard(mode, is_admin=True),
+            components=kb.settings_keyboard(mode, is_admin=True, shift_count=cfg["shift_count"] if cfg else None),
         )
         return
 
@@ -1159,6 +1232,21 @@ async def approved_others_for_month(viewer: dict, year: int, month: int, region_
     return out
 
 
+def _shift_slot_index(cfg: dict, target_shift_index: int, date_str: str) -> int:
+    """اسلاتِ یک شیفت در یک تاریخ؛ اگر برای آن شیفت override اختصاصی تنظیم شده باشد از همان
+    به‌عنوان لنگر استفاده می‌شود، وگرنه از فاصله‌ی مساوی نسبت به لنگر سراسری محاسبه می‌شود."""
+    override = (cfg.get("overrides") or {}).get(str(target_shift_index))
+    if override:
+        return shift.slot_index_for(
+            cfg["cycle_length"], cfg["shift_count"], override["ref_date"],
+            target_shift_index, override["ref_slot_index"], date_str, target_shift_index,
+        )
+    return shift.slot_index_for(
+        cfg["cycle_length"], cfg["shift_count"], cfg["ref_date"],
+        cfg["ref_shift_index"], cfg["ref_slot_index"], date_str, target_shift_index,
+    )
+
+
 async def shift_labels_for_month(db_user: dict, year: int, month: int) -> dict:
     mode = await run_db(db.get_calendar_mode)
     if mode != "shift" or db_user.get("shift_index") is None:
@@ -1170,10 +1258,7 @@ async def shift_labels_for_month(db_user: dict, year: int, month: int) -> dict:
     out = {}
     for day in range(1, ndays + 1):
         ds = jalali.parse_date_str(year, month, day)
-        idx = shift.slot_index_for(
-            cfg["cycle_length"], cfg["shift_count"], cfg["ref_date"],
-            cfg["ref_shift_index"], cfg["ref_slot_index"], ds, db_user["shift_index"],
-        )
+        idx = _shift_slot_index(cfg, db_user["shift_index"], ds)
         out[ds] = cfg["labels"][idx]["short"]
     return out
 
@@ -1265,6 +1350,10 @@ async def on_callback(callback: CallbackQuery):
             await callback.message.reply("وضعیت‌ها ذخیره شده‌اند. می‌توانید دوباره آیکون‌ها را تغییر دهید.")
         elif data.startswith("invrole:"):
             await cb_invite_role(callback, data)
+        elif data.startswith("invshift:"):
+            await cb_invite_shift(callback, data)
+        elif data.startswith("invregion:"):
+            await cb_invite_region(callback, data)
         elif data.startswith("invgroup:"):
             await cb_invite_group(callback, data)
         elif data.startswith("editcap:"):
@@ -1273,10 +1362,12 @@ async def on_callback(callback: CallbackQuery):
             await cb_approve_start(callback, data)
         elif data.startswith("setrole:"):
             await cb_set_role(callback, data)
-        elif data.startswith("setshift:"):
-            await cb_set_shift(callback, data)
-        elif data.startswith("setgroup:"):
-            await cb_set_group(callback, data)
+        elif data.startswith("aprv_shift:"):
+            await cb_aprv_shift(callback, data)
+        elif data.startswith("aprv_region:"):
+            await cb_aprv_region(callback, data)
+        elif data.startswith("aprv_group:"):
+            await cb_aprv_group(callback, data)
         elif data.startswith("setmembershift:"):
             await cb_set_member_shift_start(callback, data)
         elif data.startswith("applymembershift:"):
@@ -1289,6 +1380,16 @@ async def on_callback(callback: CallbackQuery):
             await cb_cfgshift_own(callback, data)
         elif data.startswith("cfgshift_ref:"):
             await cb_cfgshift_ref(callback, data)
+        elif data.startswith("cfgfirst:"):
+            await cb_cfg_first_day(callback, data)
+        elif data == "nav_main":
+            await cb_nav_main(callback)
+        elif data == "nav_back_admin":
+            await cb_nav_back_admin(callback)
+        elif data.startswith("shiftcfg:"):
+            await cb_shift_own_settings(callback, data)
+        elif data.startswith("shiftcfgslot:"):
+            await cb_shift_own_settings_slot(callback, data)
         # ---- مناطق / مسئول شیفت / رنگ / تقویم منطقه ----
         elif data == "region_new":
             states.set_state(callback.user.id, action="new_region_name")
@@ -1297,10 +1398,20 @@ async def on_callback(callback: CallbackQuery):
             rid = int(data.split(":")[1])
             region = await run_db(db.get_region, rid)
             if region:
+                cap = await run_db(db.get_region_max_seniors, rid)
+                custom = " (اختصاصی)" if region.get("max_seniors") else " (سراسری)"
                 await callback.message.reply(
                     f"منطقه: {region['name']}",
-                    components=kb.region_actions_keyboard(rid),
+                    components=kb.region_actions_keyboard(rid, max_seniors_label=f" [{cap}{custom}]"),
                 )
+        elif data.startswith("region_maxsnr:"):
+            rid = int(data.split(":")[1])
+            states.set_state(callback.user.id, action="set_region_max_seniors", region_id=rid)
+            cur = await run_db(db.get_region_max_seniors, rid)
+            await callback.message.reply(
+                f"سقف فعلیِ تکنسین ارشد در این منطقه: {cur}\n"
+                "عدد جدید را وارد کنید؛ یا برای پیروی دوباره از سقف سراسری، عدد 0 را بفرستید:"
+            )
         elif data.startswith("region_rename:"):
             rid = int(data.split(":")[1])
             states.set_state(callback.user.id, action="rename_region", region_id=rid)
@@ -1359,22 +1470,6 @@ async def on_callback(callback: CallbackQuery):
         elif data == "settings_regions":
             regions = await run_db(db.list_regions)
             await callback.message.reply("مناطق:", components=kb.regions_manage_keyboard(regions))
-        elif data == "settings_groups":
-            groups = await run_db(db.list_groups)
-            if not groups:
-                await callback.message.reply("هنوز هیچ گروهی ساخته نشده. از «🗺 مدیریت مناطق» شروع کنید.")
-            else:
-                lines = []
-                for g in groups:
-                    region = await run_db(db.get_region, g["region_id"]) if g.get("region_id") else None
-                    rname = region["name"] if region else "—"
-                    lines.append(
-                        f"• {g['name']} | منطقه: {rname} | ظرفیت: {g['max_concurrent']} | رنگ: {g.get('color') or '—'}"
-                    )
-                await callback.message.reply(
-                    "گروه‌های موجود:\n" + "\n".join(lines),
-                    components=kb.groups_edit_keyboard(groups),
-                )
         elif data == "settings_shiftleads":
             leads = await run_db(db.list_shift_leads)
             cap = await run_db(db.get_max_shift_leads)
@@ -1815,26 +1910,65 @@ async def apply_leave_decision(decider_id: int, leave_id: int, new_status: str, 
 
 async def cb_invite_role(callback: CallbackQuery, data: str):
     role_code = data.split(":", 1)[1]
+    mode = await run_db(db.get_calendar_mode)
+    cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+    if cfg:
+        await callback.message.edit(
+            "شیفتِ افرادی که با این لینک عضو می‌شوند را انتخاب کنید:",
+            components=kb.shift_letter_keyboard(cfg["shift_count"], f"invshift:{role_code}"),
+        )
+        return
+    await _show_invite_region_picker(callback, role_code, "none")
+
+
+async def cb_invite_shift(callback: CallbackQuery, data: str):
+    _, role_code, shift_idx = data.split(":")
+    await _show_invite_region_picker(callback, role_code, shift_idx)
+
+
+async def _show_invite_region_picker(callback: CallbackQuery, role_code, shift_code):
     viewer = await run_db(db.get_user, callback.user.id)
     if viewer and viewer.get("is_admin"):
-        groups = await run_db(db.list_groups)
+        regions = await run_db(db.list_regions)
     else:
         allowed = await run_db(db.managed_region_ids, callback.user.id)
-        groups = []
-        for rid in allowed:
-            groups += await run_db(db.list_groups, rid)
-    if not groups:
-        await callback.message.edit("هیچ گروهی در محدوده‌ی دسترسی شما نیست. ابتدا یک گروه بسازید.")
+        all_regions = await run_db(db.list_regions)
+        regions = [r for r in all_regions if r["id"] in allowed]
+    if not regions:
+        await callback.message.edit("هیچ منطقه‌ای در محدوده‌ی دسترسی شما نیست. ابتدا یک منطقه بسازید.")
         return
     await callback.message.edit(
-        "گروه افرادی که با این لینک عضو می‌شوند را انتخاب کنید:",
-        components=kb.group_select_keyboard(groups, f"invgroup:{role_code}"),
+        "منطقه‌ی کاریِ افرادی که با این لینک عضو می‌شوند را انتخاب کنید:",
+        components=kb.region_select_keyboard(regions, f"invregion:{role_code}:{shift_code}"),
+    )
+
+
+async def cb_invite_region(callback: CallbackQuery, data: str):
+    _, role_code, shift_code, region_code = data.split(":")
+    if region_code == "none":
+        await callback.message.edit("باید یک منطقه انتخاب کنید.")
+        return
+    region_id = int(region_code)
+    viewer = await run_db(db.get_user, callback.user.id)
+    if not (viewer and viewer.get("is_admin")) and not await run_db(
+        db.can_manage_region, callback.user.id, region_id
+    ):
+        await callback.message.edit("❌ این منطقه خارج از محدوده‌ی دسترسی شماست.")
+        return
+    groups = await run_db(db.list_groups, region_id)
+    if not groups:
+        await callback.message.edit("این منطقه هنوز گروهی ندارد. ابتدا یک گروه بسازید.")
+        return
+    await callback.message.edit(
+        "گروهِ کاریِ افرادی که با این لینک عضو می‌شوند را انتخاب کنید:",
+        components=kb.group_select_keyboard(groups, f"invgroup:{role_code}:{shift_code}", allow_none=False),
     )
 
 
 async def cb_invite_group(callback: CallbackQuery, data: str):
-    _, role_code, group_code = data.split(":")
+    _, role_code, shift_code, group_code = data.split(":")
     role = None if role_code == "none" else role_code
+    shift_index = None if shift_code == "none" else int(shift_code)
     group_id = None if group_code == "none" else int(group_code)
 
     viewer = await run_db(db.get_user, callback.user.id)
@@ -1845,12 +1979,26 @@ async def cb_invite_group(callback: CallbackQuery, data: str):
             return
 
     token = secrets.token_urlsafe(6)
-    await run_db(db.create_invite, token, role, group_id, callback.user.id)
+    await run_db(db.create_invite, token, role, group_id, callback.user.id, None, 0, shift_index)
+
+    role_label = config.ROLE_LABELS.get(role, "بدون نقش")
+    group = await run_db(db.get_group, group_id) if group_id else None
+    group_name = group["name"] if group else "بدون گروه"
+    region = await run_db(db.get_region, group["region_id"]) if group and group.get("region_id") else None
+    region_name = region["name"] if region else "-"
+    shift_txt = "بدون شیفت مشخص"
+    if shift_index is not None:
+        cfg = await run_db(db.get_shift_config)
+        if cfg:
+            letters = shift.shift_letters(cfg["shift_count"])
+            if shift_index < len(letters):
+                shift_txt = f"شیفت {letters[shift_index]}"
 
     username = _bot_username["value"]
     link_line = f"https://ble.ir/{username}?start={token}\n" if username else ""
     await callback.message.edit(
-        "✅ لینک دعوت ساخته شد:\n"
+        "✅ لینک دعوت ساخته شد؛ فردی که از این لینک عضو شود به‌طور خودکار با این مشخصات تایید می‌شود:\n"
+        f"نقش: {role_label}\n{shift_txt}\nمنطقه: {region_name}\nگروه: {group_name}\n\n"
         f"{link_line}"
         f"کد دعوت: `{token}`\n\n"
         "اگر با کلیک روی لینک بالا، ربات به‌طور خودکار شروع نشد، از فرد جدید بخواهید "
@@ -1883,49 +2031,73 @@ async def cb_approve_start(callback: CallbackQuery, data: str):
 
 
 async def cb_set_role(callback: CallbackQuery, data: str):
+    """مرحله‌ی بعد از انتخاب نقش: اگر تقویم شیفتی است، شیفت را می‌پرسیم؛ وگرنه می‌رویم سراغ منطقه."""
     _, user_id, role_code = data.split(":")
-    viewer = await run_db(db.get_user, callback.user.id)
-    if viewer and viewer.get("is_admin"):
-        groups = await run_db(db.list_groups)
-    else:
-        allowed = await run_db(db.managed_region_ids, callback.user.id)
-        groups = []
-        for rid in allowed:
-            groups += await run_db(db.list_groups, rid)
-        if not (viewer and allowed):
-            await callback.message.reply("شما اجازه‌ی تایید عضو جدید را ندارید.")
-            return
-    if not groups:
-        await callback.message.edit(
-            "هیچ گروهی در محدوده‌ی دسترسی شما نیست. ابتدا از «مناطق» یک گروه بسازید."
-        )
-        return
-    await callback.message.edit(
-        "گروه این فرد را انتخاب کنید:",
-        components=kb.group_select_keyboard(groups, f"setgroup:{user_id}:{role_code}"),
-    )
-
-
-async def cb_set_group(callback: CallbackQuery, data: str):
-    _, user_id, role_code, group_code = data.split(":")
     mode = await run_db(db.get_calendar_mode)
     cfg = await run_db(db.get_shift_config) if mode == "shift" else None
     if cfg:
         await callback.message.edit(
-            "شیفت این فرد را انتخاب کنید:",
-            components=kb.shift_letter_keyboard(cfg["shift_count"], f"setshift:{user_id}:{role_code}:{group_code}"),
+            "شیفتِ این فرد را انتخاب کنید:",
+            components=kb.shift_letter_keyboard(cfg["shift_count"], f"aprv_shift:{user_id}:{role_code}"),
         )
         return
-    role = None if role_code == "none" else role_code
-    group_id = None if group_code == "none" else int(group_code)
-    await finalize_approve(callback, int(user_id), role, group_id, None)
+    await _show_region_picker(callback, user_id, role_code, "none")
 
 
-async def cb_set_shift(callback: CallbackQuery, data: str):
-    _, user_id, role_code, group_code, shift_idx = data.split(":")
+async def cb_aprv_shift(callback: CallbackQuery, data: str):
+    _, user_id, role_code, shift_idx = data.split(":")
+    await _show_region_picker(callback, user_id, role_code, shift_idx)
+
+
+async def _show_region_picker(callback: CallbackQuery, user_id, role_code, shift_code):
+    viewer = await run_db(db.get_user, callback.user.id)
+    if viewer and viewer.get("is_admin"):
+        regions = await run_db(db.list_regions)
+    else:
+        allowed = await run_db(db.managed_region_ids, callback.user.id)
+        all_regions = await run_db(db.list_regions)
+        regions = [r for r in all_regions if r["id"] in allowed]
+    if not regions:
+        await callback.message.edit("هیچ منطقه‌ای در محدوده‌ی دسترسی شما نیست. ابتدا یک منطقه بسازید.")
+        return
+    await callback.message.edit(
+        "منطقه‌ی کاریِ این فرد را انتخاب کنید:",
+        components=kb.region_select_keyboard(regions, f"aprv_region:{user_id}:{role_code}:{shift_code}"),
+    )
+
+
+async def cb_aprv_region(callback: CallbackQuery, data: str):
+    _, user_id, role_code, shift_code, region_code = data.split(":")
+    if region_code == "none":
+        await callback.message.edit("باید یک منطقه انتخاب کنید.")
+        return
+    region_id = int(region_code)
+    viewer = await run_db(db.get_user, callback.user.id)
+    if not (viewer and viewer.get("is_admin")) and not await run_db(
+        db.can_manage_region, callback.user.id, region_id
+    ):
+        await callback.message.edit("❌ این منطقه خارج از محدوده‌ی دسترسی شماست.")
+        return
+    groups = await run_db(db.list_groups, region_id)
+    if not groups:
+        await callback.message.edit(
+            "این منطقه هنوز گروهی ندارد. ابتدا از «📋 گروه‌های این منطقه» یک گروه بسازید."
+        )
+        return
+    await callback.message.edit(
+        "گروهِ کاریِ این فرد را انتخاب کنید:",
+        components=kb.group_select_keyboard(
+            groups, f"aprv_group:{user_id}:{role_code}:{shift_code}", allow_none=False
+        ),
+    )
+
+
+async def cb_aprv_group(callback: CallbackQuery, data: str):
+    _, user_id, role_code, shift_code, group_code = data.split(":")
     role = None if role_code == "none" else role_code
+    shift_index = None if shift_code == "none" else int(shift_code)
     group_id = None if group_code == "none" else int(group_code)
-    await finalize_approve(callback, int(user_id), role, group_id, int(shift_idx))
+    await finalize_approve(callback, int(user_id), role, group_id, shift_index)
 
 
 async def finalize_approve(callback: CallbackQuery, user_id: int, role, group_id, shift_index):
@@ -1939,11 +2111,22 @@ async def finalize_approve(callback: CallbackQuery, user_id: int, role, group_id
     role_label = config.ROLE_LABELS.get(role, "بدون نقش")
     group = await run_db(db.get_group, group_id) if group_id else None
     group_name = group["name"] if group else "بدون گروه"
-    await callback.message.edit(f"✅ کاربر تایید شد.\nنقش: {role_label}\nگروه: {group_name}")
+    region = await run_db(db.get_region, group["region_id"]) if group and group.get("region_id") else None
+    region_name = region["name"] if region else "-"
+    shift_txt = ""
+    if shift_index is not None:
+        cfg = await run_db(db.get_shift_config)
+        if cfg:
+            letters = shift.shift_letters(cfg["shift_count"])
+            if shift_index < len(letters):
+                shift_txt = f"\nشیفت: {letters[shift_index]}"
+    await callback.message.edit(
+        f"✅ کاربر تایید شد.\nنقش: {role_label}{shift_txt}\nمنطقه: {region_name}\nگروه: {group_name}"
+    )
     try:
         await client.send_message(
             user_id,
-            f"✅ شما توسط مدیر تایید شدید.\nنقش: {role_label}\nگروه: {group_name}",
+            f"✅ شما توسط مدیر تایید شدید.\nنقش: {role_label}{shift_txt}\nمنطقه: {region_name}\nگروه: {group_name}",
             components=kb.user_menu(),
         )
     except Exception:
@@ -2008,6 +2191,74 @@ async def cb_cfgshift_own(callback: CallbackQuery, data: str):
     )
 
 
+
+
+async def cb_nav_main(callback: CallbackQuery):
+    states.clear_state(callback.user.id)
+    db_user = await run_db(db.get_user, callback.user.id)
+    await callback.message.reply("منوی اصلی:", components=kb.menu_for_user(db_user))
+
+
+async def cb_nav_back_admin(callback: CallbackQuery):
+    states.clear_state(callback.user.id)
+    db_user = await run_db(db.get_user, callback.user.id)
+    await callback.message.reply("بازگشت:", components=kb.menu_for_user(db_user))
+
+
+async def cb_cfg_first_day(callback: CallbackQuery, data: str):
+    """اولین روز کاری هر شیفت — سپس سقف مسئول و راهنمای کپی ساختار."""
+    parts = data.split(":")
+    # cfgfirst:{shift_index}:{slot_index}
+    if len(parts) < 3:
+        # only cfgfirst:{shift_index} from keyboard prefix misuse
+        return
+    shift_index = int(parts[1])
+    slot_idx = int(parts[2])
+    state = states.get_state(callback.user.id)
+    if not state or state.get("action") != "cfg_first_day":
+        return
+    first_days = dict(state.get("first_days") or {})
+    first_days[str(shift_index)] = slot_idx
+    # ذخیرهٔ override برای این شیفت
+    await run_db(db.set_shift_override, shift_index, today_str(), slot_idx)
+
+    letters = shift.shift_letters(state["shift_count"])
+    next_i = shift_index + 1
+    while next_i < state["shift_count"] and str(next_i) in first_days:
+        next_i += 1
+    if next_i < state["shift_count"]:
+        states.set_state(
+            callback.user.id,
+            action="cfg_first_day",
+            shift_count=state["shift_count"],
+            cycle_length=state["cycle_length"],
+            labels=state["labels"],
+            first_day_index=next_i,
+            first_days=first_days,
+            own_shift_index=state.get("own_shift_index"),
+            own_ref_slot=state.get("own_ref_slot"),
+        )
+        await callback.message.edit(
+            f"✅ شیفت {letters[shift_index]}: اولین روز کاری = «{state['labels'][slot_idx]['name']}»\n\n"
+            f"شیفت {letters[next_i]} — ردیفِ اولین روز کاری را انتخاب کنید:",
+            components=kb.slot_select_keyboard(state["labels"], f"cfgfirst:{next_i}"),
+        )
+        return
+
+    # همهٔ شیفت‌ها انجام شد → تعداد مسئول
+    states.set_state(
+        callback.user.id,
+        action="cfg_leads_per_shift",
+        shift_count=state["shift_count"],
+        first_days=first_days,
+    )
+    await callback.message.edit(
+        f"✅ اولین روز کاری همهٔ شیفت‌ها ثبت شد.\n\n"
+        f"حالا «تعداد مسئول شیفت» را وارد کنید "
+        f"(سقف کل مسئولانی که می‌توانید منصوب کنید، مثلاً {state['shift_count']}):"
+    )
+
+
 async def cb_cfgshift_ref(callback: CallbackQuery, data: str):
     _, idx = data.split(":")
     idx = int(idx)
@@ -2019,14 +2270,79 @@ async def cb_cfgshift_ref(callback: CallbackQuery, data: str):
         db.save_shift_config, state["shift_count"], state["cycle_length"], state["labels"],
         ref_date, state["own_shift_index"], idx,
     )
-    states.clear_state(callback.user.id)
     letters = shift.shift_letters(state["shift_count"])
+    # شیفت خود مدیر از قبل انتخاب شده
+    first_days = {str(state["own_shift_index"]): idx}
+    start_i = 0
+    while start_i < state["shift_count"] and str(start_i) in first_days:
+        start_i += 1
+    if start_i >= state["shift_count"]:
+        # همه از قبل پر است (نادر) → مستقیم سقف مسئول
+        states.set_state(
+            callback.user.id,
+            action="cfg_leads_per_shift",
+            shift_count=state["shift_count"],
+            first_days=first_days,
+        )
+        await callback.message.edit(
+            "✅ چرخه‌ی شیفت و اولین روز کاری همهٔ شیفت‌ها ثبت شد.\n\n"
+            "حالا «تعداد مسئول شیفت» را وارد کنید (سقف کل، مثلاً "
+            f"{state['shift_count']}):"
+        )
+        return
+    states.set_state(
+        callback.user.id,
+        action="cfg_first_day",
+        shift_count=state["shift_count"],
+        cycle_length=state["cycle_length"],
+        labels=state["labels"],
+        first_day_index=start_i,
+        first_days=first_days,
+        own_shift_index=state["own_shift_index"],
+        own_ref_slot=idx,
+    )
     await callback.message.edit(
-        "✅ چرخه‌ی شیفت با موفقیت پیکربندی شد.\n"
-        f"شیفت‌ها: {', '.join(letters)}\nطول سیکل: {state['cycle_length']} روز\n"
-        f"امروز برای شیفت شما ({letters[state['own_shift_index']]}) روی «{state['labels'][idx]['name']}» است.\n\n"
-        "نکته: برای اعضایی که از قبل عضو بودند یا از طریق لینک دعوت مستقیم اضافه شده‌اند، "
-        "از «👥 لیست اعضا» شیفت هرکدام را تعیین/ویرایش کنید."
+        "✅ چرخه‌ی شیفت ذخیره شد.\n"
+        f"شیفت‌ها: {', '.join(letters)} | طول سیکل: {state['cycle_length']} روز\n\n"
+        "مرحلهٔ بعد: «اولین روز کاری» هر شیفت را مشخص کنید "
+        "(کدام ردیف سیکل، روز اولِ کاریِ آن شیفت است).\n\n"
+        f"شیفت {letters[start_i]} — ردیفِ اولین روز کاری را انتخاب کنید:",
+        components=kb.slot_select_keyboard(state["labels"], f"cfgfirst:{start_i}"),
+    )
+
+
+async def cb_shift_own_settings(callback: CallbackQuery, data: str):
+    """طبق درخواست: برای هر شیفت یک کلید تنظیمات جدا — اینجا امکان تصحیح نقطه‌ی مرجع
+    همان شیفت را می‌دهد (مستقل از بقیه‌ی شیفت‌ها) بدون نیاز به پیکربندی کامل از نو."""
+    shift_index = int(data.split(":", 1)[1])
+    cfg = await run_db(db.get_shift_config)
+    if not cfg:
+        await callback.message.reply("ابتدا باید چرخه‌ی شیفت را پیکربندی کنید.")
+        return
+    letters = shift.shift_letters(cfg["shift_count"])
+    letter = letters[shift_index] if shift_index < len(letters) else str(shift_index)
+    cur_idx = _shift_slot_index(cfg, shift_index, today_str())
+    await callback.message.edit(
+        f"تنظیمات شیفت {letter}\n"
+        f"امروز طبق محاسبه‌ی فعلی روی «{cfg['labels'][cur_idx]['name']}» است.\n"
+        "اگر درست نیست، ردیف درستِ امروز را برای همین شیفت انتخاب کنید تا فقط همین شیفت "
+        "تصحیح شود (بقیه‌ی شیفت‌ها دست‌نخورده می‌مانند):",
+        components=kb.slot_select_keyboard(cfg["labels"], f"shiftcfgslot:{shift_index}"),
+    )
+
+
+async def cb_shift_own_settings_slot(callback: CallbackQuery, data: str):
+    _, shift_index, slot_idx = data.split(":")
+    shift_index, slot_idx = int(shift_index), int(slot_idx)
+    cfg = await run_db(db.get_shift_config)
+    if not cfg:
+        return
+    await run_db(db.set_shift_override, shift_index, today_str(), slot_idx)
+    letters = shift.shift_letters(cfg["shift_count"])
+    letter = letters[shift_index] if shift_index < len(letters) else str(shift_index)
+    await callback.message.edit(
+        f"✅ نقطه‌ی مرجعِ شیفت {letter} تصحیح شد: امروز روی «{cfg['labels'][slot_idx]['name']}» است.\n"
+        "بقیه‌ی شیفت‌ها بدون تغییر ماندند."
     )
 
 

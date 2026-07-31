@@ -335,6 +335,19 @@ def groups_edit_keyboard(groups) -> InlineKeyboardMarkup:
     return kb
 
 
+
+
+def after_add_keyboard(*, add_callback: str, add_label: str = "➕ افزودن مورد دیگر",
+                       back_callback: str = "nav_back_admin",
+                       back_label: str = "↩️ بازگشت") -> InlineKeyboardMarkup:
+    """بعد از هر افزودن موفق: افزودن دوباره + بازگشت + منوی اصلی."""
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton(text=add_label, callback_data=add_callback), row=1)
+    kb.add(InlineKeyboardButton(text=back_label, callback_data=back_callback), row=2)
+    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=3)
+    return kb
+
+
 def regions_manage_keyboard(regions) -> InlineKeyboardMarkup:
     """مدیریت مناطق — فقط مدیر."""
     kb = InlineKeyboardMarkup()
@@ -347,13 +360,16 @@ def regions_manage_keyboard(regions) -> InlineKeyboardMarkup:
     return kb
 
 
-def region_actions_keyboard(region_id: int) -> InlineKeyboardMarkup:
+def region_actions_keyboard(region_id: int, max_seniors_label: str = "") -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     buttons = [
         InlineKeyboardButton(text="✏️ تغییر نام", callback_data=f"region_rename:{region_id}"),
         InlineKeyboardButton(text="🗑 حذف", callback_data=f"region_del:{region_id}"),
         InlineKeyboardButton(text="📋 گروه‌های این منطقه", callback_data=f"region_groups:{region_id}"),
         InlineKeyboardButton(text="➕ ساخت گروه در این منطقه", callback_data=f"region_addgroup:{region_id}"),
+        InlineKeyboardButton(
+            text=f"🎓 سقف ارشد این منطقه{max_seniors_label}", callback_data=f"region_maxsnr:{region_id}"
+        ),
         InlineKeyboardButton(text="📅 تقویم", callback_data=f"cal_region:{region_id}"),
     ]
     _add_two_col(kb, buttons)
@@ -472,10 +488,12 @@ def batch_day_decision_keyboard(items: list) -> InlineKeyboardMarkup:
     return kb
 
 
-def settings_keyboard(current_mode: str, *, is_admin: bool = True) -> InlineKeyboardMarkup:
+def settings_keyboard(current_mode: str, *, is_admin: bool = True, shift_count: int = None) -> InlineKeyboardMarkup:
     """
     تنظیمات کامل فقط برای مدیر (سیکل، نوع تقویم، رنگ‌ها، سقف مسئول شیفت).
     مسئول شیفت از منوی جداگانهٔ عملیاتی استفاده می‌کند.
+    shift_count: اگر تقویم شیفتی پیکربندی شده، تعداد شیفت‌ها — برای نمایش
+    یک دکمه‌ی تنظیمات مجزا برای هر شیفت (A, B, C, ...).
     """
     kb = InlineKeyboardMarkup()
     row = 1
@@ -498,10 +516,18 @@ def settings_keyboard(current_mode: str, *, is_admin: bool = True) -> InlineKeyb
         row += 1
         if current_mode == "shift":
             kb.add(
-                InlineKeyboardButton(text="🔧 پیکربندی چرخه شیفت", callback_data="cfgshift:start"),
+                InlineKeyboardButton(text="🔧 پیکربندی کامل چرخه‌ی شیفت (از نو)", callback_data="cfgshift:start"),
                 row=row,
             )
             row += 1
+            if shift_count:
+                import shift as shift_mod
+                for idx, letter in enumerate(shift_mod.shift_letters(shift_count)):
+                    kb.add(
+                        InlineKeyboardButton(text=f"⚙️ تنظیمات شیفت {letter}", callback_data=f"shiftcfg:{idx}"),
+                        row=row,
+                    )
+                    row += 1
         kb.add(
             InlineKeyboardButton(text="🎨 رنگ گروه‌ها", callback_data="settings_colors"),
             row=row,
@@ -513,17 +539,12 @@ def settings_keyboard(current_mode: str, *, is_admin: bool = True) -> InlineKeyb
         )
         row += 1
         kb.add(
-            InlineKeyboardButton(text="🎓 سقف تکنسین ارشد در هر منطقه", callback_data="settings_max_seniors"),
+            InlineKeyboardButton(text="🎓 سقف پیش‌فرضِ ارشد (برای مناطق بدون سقف اختصاصی)", callback_data="settings_max_seniors"),
             row=row,
         )
         row += 1
         kb.add(
-            InlineKeyboardButton(text="🗺 مدیریت مناطق", callback_data="settings_regions"),
-            row=row,
-        )
-        row += 1
-        kb.add(
-            InlineKeyboardButton(text="📋 مدیریت گروه‌ها", callback_data="settings_groups"),
+            InlineKeyboardButton(text="🗺 مدیریت مناطق (و گروه‌های هرکدام)", callback_data="settings_regions"),
             row=row,
         )
         row += 1
