@@ -524,7 +524,7 @@ def settings_keyboard(current_mode: str, *, is_admin: bool = True, shift_count: 
                 import shift as shift_mod
                 for idx, letter in enumerate(shift_mod.shift_letters(shift_count)):
                     kb.add(
-                        InlineKeyboardButton(text=f"⚙️ تنظیمات شیفت {letter}", callback_data=f"shiftcfg:{idx}"),
+                        InlineKeyboardButton(text=f"⚙️ تنظیمات شیفت {letter}", callback_data=f"sfix:{idx}"),
                         row=row,
                     )
                     row += 1

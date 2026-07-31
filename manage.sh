@@ -48,65 +48,63 @@ have_cmd() { command -v "$1" >/dev/null 2>&1; }
 # ---------------------------------------------------------------------------
 # Progress bar / status
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Progress bar / status  (ASCII so every terminal shows it)
+# ---------------------------------------------------------------------------
 progress_bar() {
-  # usage: progress_bar PERCENT "message"
-  local pct="$1"
+  local pct="${1:-0}"
   local msg="${2:-}"
-  local width=24
-  if [ "$pct" -gt 100 ]; then pct=100; fi
-  if [ "$pct" -lt 0 ]; then pct=0; fi
-  local filled=$((pct * width / 100))
-  local empty=$((width - filled))
+  local width=28
+  [ "$pct" -gt 100 ] 2>/dev/null && pct=100
+  [ "$pct" -lt 0 ] 2>/dev/null && pct=0
+  local filled=$(( pct * width / 100 ))
+  local empty=$(( width - filled ))
   local bar=""
   local i
-  for ((i=0; i<filled; i++)); do bar="${bar}#"; done
-  for ((i=0; i<empty; i++)); do bar="${bar}-"; done
-  printf "\r${C_TEAL}[%s] %3d%%${C_RESET} %s" "$bar" "$pct" "$msg"
+  for ((i=0; i<filled; i++)); do bar="${bar}="; done
+  for ((i=0; i<empty; i++)); do bar="${bar} "; done
+  # pad message
+  printf "\r${C_TEAL}[%s] %3d%%${C_RESET} %-40s" "$bar" "$pct" "$msg"
   if [ "$pct" -ge 100 ]; then
     printf "\n"
   fi
 }
 
-step_status() {
-  # usage: step_status CURRENT TOTAL "message"
-  local cur="$1"
-  local total="$2"
-  local msg="$3"
-  local pct=0
-  if [ "$total" -gt 0 ]; then
-    pct=$((cur * 100 / total))
-  fi
-  progress_bar "$pct" "$msg"
+step_banner() {
+  # step_banner N TOTAL "Title"
+  local n="$1" total="$2" title="$3"
+  local pct=$(( n * 100 / total ))
+  echo ""
+  echo -e "${C_GOLD}==> Step ${n}/${total}: ${title}${C_RESET}"
+  progress_bar "$pct" "$title"
 }
 
 run_with_spinner() {
-  # usage: run_with_spinner "label" command args...
   local label="$1"; shift
   local log
-  log="$(mktemp)"
+  log="$(mktemp 2>/dev/null || echo /tmp/bale-bot-spin.log)"
   "$@" >"$log" 2>&1 &
   local pid=$!
   local spin='|/-\'
   local i=0
   while kill -0 "$pid" 2>/dev/null; do
     i=$(( (i + 1) % 4 ))
-    printf "\r${C_TEAL}[%c]${C_RESET} %s..." "${spin:$i:1}" "$label"
-    sleep 0.15
+    printf "\r${C_TEAL}[%c]${C_RESET} %s...   " "${spin:$i:1}" "$label"
+    sleep 0.12
   done
   wait "$pid"
   local rc=$?
   if [ $rc -eq 0 ]; then
-    printf "\r${C_GREEN}[OK]${C_RESET} %s          \n" "$label"
+    printf "\r${C_GREEN}[OK]${C_RESET} %s                \n" "$label"
   else
-    printf "\r${C_RED}[FAIL]${C_RESET} %s          \n" "$label"
-    echo "---- last log lines ----"
-    tail -n 30 "$log" || true
+    printf "\r${C_RED}[FAIL]${C_RESET} %s              \n" "$label"
+    echo "---- log (last 25 lines) ----"
+    tail -n 25 "$log" 2>/dev/null || true
   fi
   rm -f "$log"
   return $rc
 }
-
-
 
 ensure_python() {
   if have_cmd python3; then
@@ -226,29 +224,9 @@ do_install() {
       fi
     else
       info "Downloading project files into $target ..."
-      if [[ "$REPO_URL" == *"YOUR_USER"* ]]; then
-        err "Please set REPO_URL to your real GitHub repo first."
-        echo "  Example: export REPO_URL=https://github.com/myuser/bale-leave-bot.git"
-        echo "  Or edit REPO_URL at the top of manage.sh"
-        return 1
-      fi
-      progress_bar 5 "Preparing download..."
-      # git clone with progress; pipe through while for status
-      if git clone --progress --branch "$REPO_BRANCH" "$REPO_URL" "$target" 2>&1 | while IFS= read -r line; do
-          case "$line" in
-            *Receiving\ objects:*)
-              p=$(echo "$line" | sed -n "s/.*Receiving objects: *\([0-9]\+\)%.*/\1/p")
-              [ -n "$p" ] && progress_bar "$p" "Downloading objects..."
-              ;;
-            *Resolving\ deltas:*)
-              p=$(echo "$line" | sed -n "s/.*Resolving deltas: *\([0-9]\+\)%.*/\1/p")
-              [ -n "$p" ] && progress_bar "$((50 + p/2))" "Resolving deltas..."
-              ;;
-            *)
-              ;;
-          esac
-        done
-      then
+      step_banner 1 5 "Download from GitHub"
+      progress_bar 10 "Starting git clone..."
+      if GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$target"; then
         progress_bar 100 "Download complete"
         ok "Repository cloned to $target"
       else
@@ -258,22 +236,29 @@ do_install() {
     fi
   fi
 
-  cd "$target"
+  cd "$target" || { err "Cannot enter $target"; return 1; }
   ok "Working directory: $(pwd)"
+  info "All next steps run inside this folder."
 
   # venv
+  step_banner 2 5 "Python virtualenv"
   if [ ! -d "venv" ]; then
-    info "Creating virtual environment..."
+    progress_bar 30 "Creating venv..."
     if ! python3 -m venv venv 2>/dev/null; then
       warn "Could not create venv (common on Termux). Continuing without it."
+    else
+      progress_bar 50 "venv created"
     fi
+  else
+    progress_bar 50 "venv already exists"
   fi
   activate_venv "$target"
+  progress_bar 100 "Virtualenv ready"
 
-  info "Installing Python dependencies..."
+  step_banner 3 5 "Install Python packages"
   progress_bar 10 "Upgrading pip..."
   run_with_spinner "Upgrading pip" pip install --upgrade pip || true
-  progress_bar 40 "Installing requirements..."
+  progress_bar 40 "Installing requirements (this may take a minute)..."
   if run_with_spinner "Installing requirements" pip install -r requirements.txt; then
     progress_bar 100 "Dependencies installed"
   else
@@ -282,6 +267,7 @@ do_install() {
   fi
 
   # .env / token
+  step_banner 4 5 "Bot token (.env)"
   if [ ! -f ".env" ]; then
     echo ""
     read -rp "Enter your Bale bot token (from BotFather): " TOKEN
@@ -305,6 +291,7 @@ do_install() {
   fi
 
   # systemd (optional)
+  step_banner 5 5 "Service / finish"
   if have_cmd systemctl; then
     echo ""
     read -rp "Create systemd service for 24/7 auto-restart? (y/n) " ANS

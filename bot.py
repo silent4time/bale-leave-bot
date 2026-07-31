@@ -1386,10 +1386,10 @@ async def on_callback(callback: CallbackQuery):
             await cb_nav_main(callback)
         elif data == "nav_back_admin":
             await cb_nav_back_admin(callback)
-        elif data.startswith("shiftcfg:"):
-            await cb_shift_own_settings(callback, data)
-        elif data.startswith("shiftcfgslot:"):
+        elif data.startswith("sslot:") or data.startswith("shiftcfgslot:"):
             await cb_shift_own_settings_slot(callback, data)
+        elif data.startswith("sfix:") or data.startswith("shiftcfg:"):
+            await cb_shift_own_settings(callback, data)
         # ---- مناطق / مسئول شیفت / رنگ / تقویم منطقه ----
         elif data == "region_new":
             states.set_state(callback.user.id, action="new_region_name")
@@ -2366,7 +2366,11 @@ async def cb_cfgshift_ref(callback: CallbackQuery, data: str):
 async def cb_shift_own_settings(callback: CallbackQuery, data: str):
     """طبق درخواست: برای هر شیفت یک کلید تنظیمات جدا — اینجا امکان تصحیح نقطه‌ی مرجع
     همان شیفت را می‌دهد (مستقل از بقیه‌ی شیفت‌ها) بدون نیاز به پیکربندی کامل از نو."""
-    shift_index = int(data.split(":", 1)[1])
+    try:
+        shift_index = int(data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.message.reply("دکمه نامعتبر است.")
+        return
     cfg = await run_db(db.get_shift_config)
     if not cfg:
         await callback.message.reply("ابتدا باید چرخه‌ی شیفت را پیکربندی کنید.")
@@ -2379,23 +2383,69 @@ async def cb_shift_own_settings(callback: CallbackQuery, data: str):
         f"امروز طبق محاسبه‌ی فعلی روی «{cfg['labels'][cur_idx]['name']}» است.\n"
         "اگر درست نیست، ردیف درستِ امروز را برای همین شیفت انتخاب کنید تا فقط همین شیفت "
         "تصحیح شود (بقیه‌ی شیفت‌ها دست‌نخورده می‌مانند):",
-        components=kb.slot_select_keyboard(cfg["labels"], f"shiftcfgslot:{shift_index}"),
+        components=kb.slot_select_keyboard(cfg["labels"], f"sslot:{shift_index}"),
     )
 
 
 async def cb_shift_own_settings_slot(callback: CallbackQuery, data: str):
-    _, shift_index, slot_idx = data.split(":")
-    shift_index, slot_idx = int(shift_index), int(slot_idx)
+    """ثبت روز کاری / نقطه مرجع یک شیفت خاص.
+    فرمت‌های پشتیبانی‌شده:
+      sslot:{shift_index}:{slot_idx}
+      shiftcfgslot:{shift_index}:{slot_idx}
+    """
+    parts = data.split(":")
+    if len(parts) < 3:
+        await callback.message.reply("دکمه نامعتبر است. دوباره از تنظیمات شیفت وارد شوید.")
+        return
+    try:
+        shift_index = int(parts[1])
+        slot_idx = int(parts[2])
+    except ValueError:
+        await callback.message.reply("داده نامعتبر بود.")
+        return
+
     cfg = await run_db(db.get_shift_config)
     if not cfg:
+        await callback.message.reply("ابتدا چرخهٔ شیفت را پیکربندی کنید.")
         return
-    await run_db(db.set_shift_override, shift_index, today_str(), slot_idx)
+    labels = cfg.get("labels") or []
+    if slot_idx < 0 or slot_idx >= len(labels):
+        await callback.message.reply("ردیف انتخاب‌شده معتبر نیست.")
+        return
+    if shift_index < 0 or shift_index >= int(cfg["shift_count"]):
+        await callback.message.reply("شماره شیفت نامعتبر است.")
+        return
+
+    try:
+        await run_db(db.set_shift_override, shift_index, today_str(), slot_idx)
+    except Exception:
+        logger.exception("set_shift_override failed")
+        await callback.message.reply("خطا در ذخیره. لطفاً دوباره تلاش کنید.")
+        return
+
+    # تأیید از دیتابیس
+    cfg2 = await run_db(db.get_shift_config)
+    ov = (cfg2.get("overrides") or {}).get(str(shift_index)) if cfg2 else None
     letters = shift.shift_letters(cfg["shift_count"])
     letter = letters[shift_index] if shift_index < len(letters) else str(shift_index)
-    await callback.message.edit(
-        f"✅ نقطه‌ی مرجعِ شیفت {letter} تصحیح شد: امروز روی «{cfg['labels'][slot_idx]['name']}» است.\n"
-        "بقیه‌ی شیفت‌ها بدون تغییر ماندند."
+    slot_name = labels[slot_idx]["name"]
+    saved = "✅ ذخیره شد" if ov and int(ov.get("ref_slot_index", -1)) == slot_idx else "⚠️ ذخیره مشکوک"
+
+    msg = (
+        f"{saved}\n"
+        f"شیفت {letter}: امروز روی «{slot_name}» تنظیم شد.\n"
+        "بقیه‌ی شیفت‌ها بدون تغییر ماندند.\n\n"
+        "می‌توانید از تنظیمات، شیفت بعدی را هم اصلاح کنید."
     )
+    try:
+        await callback.message.edit(msg)
+    except Exception:
+        logger.exception("edit after sslot failed")
+        try:
+            await callback.message.reply(msg)
+        except Exception:
+            logger.exception("reply after sslot also failed")
+
 
 
 async def cb_dayinfo(callback: CallbackQuery, data: str):
