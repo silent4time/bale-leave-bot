@@ -181,7 +181,8 @@ def menu_for_user(db_user: dict) -> MenuKeyboardMarkup:
         return admin_menu(also_shift_lead=bool(db_user.get("is_shift_lead")))
     if db_user.get("is_shift_lead"):
         return shift_lead_menu()
-    if db_user.get("is_senior"):
+    # is_senior یا نقش snr هر دو منوی ارشد می‌گیرند
+    if db_user.get("is_senior") or db_user.get("role") == "snr":
         return senior_menu()
     return user_menu()
 

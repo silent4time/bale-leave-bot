@@ -279,6 +279,10 @@ def init_db():
     with _conn() as con:
         con.executescript(SCHEMA)
         _migrate(con)
+    try:
+        repair_senior_flags()
+    except Exception:
+        pass
 
 
 # ============================================================== تنظیمات ====
@@ -712,6 +716,9 @@ def approve_user(user_id: int, role: str, group_id: int, shift_index=None,
     if region_id is None and group_id is not None:
         g = get_group(group_id)
         region_id = g["region_id"] if g else None
+    # نقش «ارشد» همیشه فلگ is_senior را هم روشن می‌کند
+    if role == "snr":
+        is_senior = 1
     with _conn() as con:
         con.execute(
             """
@@ -723,6 +730,22 @@ def approve_user(user_id: int, role: str, group_id: int, shift_index=None,
             (role, group_id, region_id, shift_index, 1 if is_senior else 0, user_id),
         )
     inv_user(user_id)
+
+
+def repair_senior_flags():
+    """کاربرانی که role=snr دارند ولی is_senior=0 مانده‌اند را اصلاح می‌کند."""
+    with _conn() as con:
+        con.execute(
+            "UPDATE users SET is_senior = 1 WHERE role = 'snr' AND IFNULL(is_senior, 0) = 0"
+        )
+        # اگر گروهی به نام تکنسین ارشد دارند و role مشخص نیست
+        con.execute(
+            """
+            UPDATE users SET is_senior = 1, role = COALESCE(NULLIF(role, ''), 'snr')
+            WHERE IFNULL(is_senior, 0) = 0
+              AND group_id IN (SELECT id FROM groups WHERE name = 'تکنسین ارشد')
+            """
+        )
 
 
 def get_max_seniors_per_region() -> int:

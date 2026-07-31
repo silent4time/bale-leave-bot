@@ -206,7 +206,7 @@ async def on_message(message: Message):
         await handle_shift_lead_menu(message, author, db_user, text)
         return
 
-    if db_user.get("is_senior"):
+    if db_user.get("is_senior") or db_user.get("role") == "snr":
         await handle_senior_menu(message, author, db_user, text)
         return
 
@@ -246,7 +246,7 @@ async def show_returning_menu(message: Message, db_user: dict):
         await message.reply("سلام! هنوز در انتظار تایید مدیر (تعیین نقش و گروه) هستید.")
     elif db_user.get("is_shift_lead"):
         await message.reply(f"سلام {name}! به پنل مسئول شیفت خوش برگشتید.", components=menu)
-    elif db_user.get("is_senior"):
+    elif db_user.get("is_senior") or db_user.get("role") == "snr":
         await message.reply(f"سلام {name}! به پنل تکنسین ارشد خوش برگشتید.", components=menu)
     else:
         await message.reply(f"سلام {name}! خوش برگشتید.", components=menu)
@@ -1205,7 +1205,14 @@ async def handle_user_menu(message: Message, author, db_user: dict, text: str):
 
 
 async def show_status(message: Message, db_user: dict):
-    role_label = config.ROLE_LABELS.get(db_user["role"], "هنوز تعیین نشده")
+    if db_user.get("is_admin"):
+        role_label = "مدیر"
+    elif db_user.get("is_shift_lead"):
+        role_label = "مسئول شیفت"
+    elif db_user.get("is_senior") or db_user.get("role") == "snr":
+        role_label = "تکنسین ارشد"
+    else:
+        role_label = config.ROLE_LABELS.get(db_user.get("role"), "هنوز تعیین نشده")
     group = await run_db(db.get_group, db_user["group_id"]) if db_user["group_id"] else None
     group_name = group["name"] if group else "هنوز تعیین نشده"
     mode = await run_db(db.get_calendar_mode)
@@ -2254,7 +2261,8 @@ async def finalize_approve(callback: CallbackQuery, user_id: int, role, group_id
         if not group or not await run_db(db.can_manage_region, callback.user.id, group.get("region_id")):
             await callback.message.edit("❌ این گروه خارج از محدوده‌ی دسترسی شماست.")
             return
-    await run_db(db.approve_user, user_id, role, group_id, shift_index)
+    is_senior = 1 if role == "snr" else 0
+    await run_db(db.approve_user, user_id, role, group_id, shift_index, None, is_senior)
     role_label = config.ROLE_LABELS.get(role, "بدون نقش")
     group = await run_db(db.get_group, group_id) if group_id else None
     group_name = group["name"] if group else "بدون گروه"
@@ -2271,10 +2279,11 @@ async def finalize_approve(callback: CallbackQuery, user_id: int, role, group_id
         f"✅ کاربر تایید شد.\nنقش: {role_label}{shift_txt}\nمنطقه: {region_name}\nگروه: {group_name}"
     )
     try:
+        approved_user = await run_db(db.get_user, user_id)
         await client.send_message(
             user_id,
             f"✅ شما توسط مدیر تایید شدید.\nنقش: {role_label}{shift_txt}\nمنطقه: {region_name}\nگروه: {group_name}",
-            components=kb.user_menu(),
+            components=kb.menu_for_user(approved_user) if approved_user else kb.user_menu(),
         )
     except Exception:
         logger.exception("خطا در اطلاع‌رسانی تایید به کاربر %s", user_id)

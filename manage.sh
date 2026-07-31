@@ -593,12 +593,12 @@ show_banner() {
   elif [ -f "$VERSION_FILE" ]; then
     ver="$(cat "$VERSION_FILE")"
   fi
-  echo -e "${C_GOLD}"
-  printf '  +------------------------------------------+\n'
-  printf '  |  Bale Leave Management Bot — Manager     |\n'
-  printf '  |  version %-31s |\n' "$ver"
-  printf '  +------------------------------------------+\n'
-  echo -e "${C_RESET}"
+  echo ""
+  echo -e "${C_GOLD}============================================${C_RESET}"
+  echo -e "${C_GOLD}  Bale Leave Management Bot - Manager${C_RESET}"
+  echo -e "${C_GOLD}  version ${ver}${C_RESET}"
+  echo -e "${C_GOLD}============================================${C_RESET}"
+  echo ""
   if [ -n "$target" ]; then
     echo -e "  Install path: ${C_DIM}$target${C_RESET}"
     if service_running; then
