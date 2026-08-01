@@ -28,6 +28,19 @@ async def run_db(func, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
 
+def allowed_add_roles(db_user: dict) -> list:
+    """نقش‌هایی که این کاربر مجاز است اضافه کند."""
+    if not db_user:
+        return []
+    if db_user.get("is_admin"):
+        return ["lead", "snr", "tech", "op"]
+    if db_user.get("is_shift_lead"):
+        return ["snr", "tech", "op"]
+    if db_user.get("is_senior") or db_user.get("role") == "snr":
+        return ["tech", "op"]
+    return []
+
+
 def display_name(row: dict) -> str:
     first = row.get("first_name") or row.get("bale_first_name")
     last = row.get("last_name")
@@ -180,43 +193,17 @@ async def on_message(message: Message):
         await message.reply("لطفاً ابتدا با دستور /start ثبت‌نام را تکمیل کنید.")
         return
 
-    if text == kb.BTN_ADD_CONTACT:
-        assignable = await run_db(db.assignable_group_ids, author.id)
-        if not (db_user.get("is_admin") or assignable):
+    if text in (kb.BTN_ADD_PEOPLE, getattr(kb, "BTN_ADD_CONTACT", ""), "➕ اضافه کردن افراد", "📇 افزودن عضو با مخاطب"):
+        roles = allowed_add_roles(db_user)
+        if not roles:
             await message.reply("شما اجازه‌ی افزودن عضو ندارید.")
             return
-        states.set_state(author.id, action="awaiting_contact")
         await message.reply(
-            "برای افزودن عضو جدید، مخاطبِ او را از دفترچه‌تلفن گوشی‌تان انتخاب و ارسال کنید.\n"
-            "اگر آن شخص از قبل با همین شماره در بله ثبت‌نام کرده و حریم خصوصی‌اش اجازه بدهد، "
-            "می‌توانید همین‌جا نقش/منطقه/گروهش را تعیین کنید.\n"
-            "در غیر این‌صورت، یک لینک دعوت می‌سازم که خودتان برایش ارسال کنید.",
-            components=kb.contact_request_menu(),
+            "روش افزودن عضو را انتخاب کنید:",
+            components=kb.add_people_method_keyboard(),
         )
         return
 
-    if db_user.get("is_admin"):
-        await handle_admin_menu(message, author, text)
-        return
-
-    if not db_user.get("approved"):
-        await message.reply("سلام! هنوز در انتظار تایید مدیر (تعیین نقش و گروه) هستید.")
-        return
-
-    if db_user.get("is_shift_lead"):
-        await handle_shift_lead_menu(message, author, db_user, text)
-        return
-
-    if db_user.get("is_senior") or db_user.get("role") == "snr":
-        await handle_senior_menu(message, author, db_user, text)
-        return
-
-    await handle_user_menu(message, author, db_user, text)
-
-
-# ==========================================================================
-#  ورود/ثبت‌نام (/start)
-# ==========================================================================
 
 async def handle_start(message: Message, author, text: str):
     parts = text.split(maxsplit=1)
@@ -432,7 +419,7 @@ async def handle_contact_shared(message: Message, author, contact):
         await message.reply("✅ دریافت شد؛ این شخص کاربر بله است.", components=kb.menu_for_user(db_user))
         await message.reply(
             f"نقش «{name or target_uid}» را انتخاب کنید:",
-            components=kb.role_select_keyboard(f"setrole:{target_uid}"),
+            components=kb.role_select_keyboard(f"setrole:{target_uid}", allowed_roles=allowed_add_roles(db_user)),
         )
         return
 
@@ -444,7 +431,7 @@ async def handle_contact_shared(message: Message, author, contact):
     phone = getattr(contact, "phone_number", None) or "؟"
     await message.reply(
         f"به‌جایش برای «{name or phone}» یک لینک دعوت می‌سازیم — نقش لینک را انتخاب کنید:",
-        components=kb.role_select_keyboard("invrole"),
+        components=kb.role_select_keyboard("invrole", allowed_roles=allowed_add_roles(db_user)),
     )
 
 
@@ -853,11 +840,16 @@ async def handle_admin_menu(message: Message, author, text: str):
         return
 
     if text == kb.ADMIN_BTN_INVITE:
+        roles = allowed_add_roles(db_user)
+        if not roles:
+            await message.reply("شما اجازه‌ی افزودن عضو ندارید.")
+            return
         await message.reply(
-            "نقش افرادی که با این لینک عضو می‌شوند را انتخاب کنید:",
-            components=kb.role_select_keyboard("invrole"),
+            "روش افزودن عضو را انتخاب کنید:",
+            components=kb.add_people_method_keyboard(),
         )
         return
+
 
     if text == kb.ADMIN_BTN_CALENDAR:
         regions = await run_db(db.list_regions)
@@ -1924,6 +1916,8 @@ async def on_callback(callback: CallbackQuery):
             await cb_batch_commit(callback)
         elif data == "batch_edit":
             await callback.message.reply("وضعیت‌ها ذخیره شده‌اند. می‌توانید دوباره آیکون‌ها را تغییر دهید.")
+        elif data.startswith("addvia:"):
+            await cb_addvia(callback, data)
         elif data.startswith("invrole:"):
             await cb_invite_role(callback, data)
         elif data.startswith("invshift:"):
@@ -1939,7 +1933,7 @@ async def on_callback(callback: CallbackQuery):
         elif data == "nav_invite_again":
             await callback.message.reply(
                 "نقش فرد دعوت‌شده را انتخاب کنید:",
-                components=kb.role_select_keyboard("invrole"),
+                components=kb.role_select_keyboard("invrole", allowed_roles=allowed_add_roles(await run_db(db.get_user, callback.user.id))),
             )
         elif data.startswith("editcap:"):
             await cb_edit_capacity(callback, data)
@@ -2520,7 +2514,40 @@ async def apply_leave_decision(decider_id: int, leave_id: int, new_status: str, 
 
 # ----------------------------------------------------- گروه‌ها / دعوت‌ها ----
 
+async def cb_addvia(callback: CallbackQuery, data: str):
+    """انتخاب روش افزودن: لینک یا دفترچه تلفن."""
+    method = data.split(":", 1)[1]
+    viewer = await run_db(db.get_user, callback.user.id)
+    roles = allowed_add_roles(viewer)
+    if not roles:
+        await _ui_reply(callback, "شما اجازه‌ی افزودن عضو ندارید.")
+        return
+    if method == "link":
+        await _ui_reply(
+            callback,
+            "نقش فرد دعوت‌شونده را انتخاب کنید:",
+            kb.role_select_keyboard("invrole", allowed_roles=roles),
+        )
+        return
+    if method == "contact":
+        states.set_state(callback.user.id, action="awaiting_contact")
+        try:
+            await callback.message.reply(
+                "دفترچه تلفن را باز کنید و مخاطب را انتخاب کنید.\n"
+                "روی دکمه «انتخاب و ارسال مخاطب» بزنید.",
+                components=kb.contact_request_menu(),
+            )
+        except Exception:
+            await callback.message.reply(
+                "دفترچه تلفن را باز کنید و مخاطب را انتخاب کنید.",
+                components=kb.contact_request_menu(),
+            )
+        return
+    await _ui_reply(callback, "گزینه نامعتبر.")
+
+
 async def cb_invite_role(callback: CallbackQuery, data: str):
+
     role_code = data.split(":", 1)[1]
     mode = await run_db(db.get_calendar_mode)
     cfg = await run_db(db.get_shift_config) if mode == "shift" else None
@@ -2737,7 +2764,7 @@ async def cb_approve_start(callback: CallbackQuery, data: str):
     if not (viewer and (viewer.get("is_admin") or allowed)):
         await callback.message.reply("شما اجازه‌ی تایید عضو جدید را ندارید.")
         return
-    await callback.message.edit("نقش این فرد را انتخاب کنید:", components=kb.role_select_keyboard(f"setrole:{user_id}"))
+    await callback.message.edit("نقش این فرد را انتخاب کنید:", components=kb.role_select_keyboard(f"setrole:{user_id}", allowed_roles=allowed_add_roles(await run_db(db.get_user, callback.user.id))))
 
 
 async def cb_set_role(callback: CallbackQuery, data: str):

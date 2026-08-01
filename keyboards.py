@@ -19,7 +19,8 @@ import config
 # ============================================================== متن منوها ====
 
 # --- مشترک بین مدیر/مسئول شیفت/ارشد ---
-BTN_ADD_CONTACT = "📇 افزودن عضو با مخاطب"
+BTN_ADD_PEOPLE = "➕ اضافه کردن افراد"
+BTN_ADD_CONTACT = BTN_ADD_PEOPLE  # سازگاری
 
 # --- مدیر ---
 # صف مرخصی در نقش «فقط مدیر» نیست.
@@ -28,7 +29,7 @@ ADMIN_BTN_PENDING = "⏳ افراد در انتظار تایید"
 ADMIN_BTN_REGIONS = "🗺 مناطق کاری"
 ADMIN_BTN_GROUPS = "📋 گروه‌ها"
 ADMIN_BTN_MEMBERS = "👥 اعضا"
-ADMIN_BTN_INVITE = "🔗 لینک دعوت"
+ADMIN_BTN_INVITE = "🔗 لینک دعوت"  # از منوی اصلی حذف؛ زیر «اضافه کردن افراد»
 ADMIN_BTN_CALENDAR = "📅 نمایش تقویم منطقه"
 ADMIN_BTN_REPORT = "📊 گزارش مرخصی‌ها"
 ADMIN_BTN_SHIFT_LEADS = "👔 مسئولان شیفت"
@@ -37,8 +38,8 @@ ADMIN_BTN_REPLACE_ADMIN = "🔁 جایگزینی مدیر"
 
 ADMIN_MENU_TEXTS = {
     ADMIN_BTN_PENDING, ADMIN_BTN_REGIONS, ADMIN_BTN_GROUPS,
-    ADMIN_BTN_MEMBERS, ADMIN_BTN_INVITE, ADMIN_BTN_CALENDAR, ADMIN_BTN_REPORT,
-    ADMIN_BTN_SHIFT_LEADS, ADMIN_BTN_SETTINGS, ADMIN_BTN_REPLACE_ADMIN, BTN_ADD_CONTACT,
+    ADMIN_BTN_MEMBERS, ADMIN_BTN_CALENDAR, ADMIN_BTN_REPORT,
+    ADMIN_BTN_SHIFT_LEADS, ADMIN_BTN_SETTINGS, ADMIN_BTN_REPLACE_ADMIN, BTN_ADD_PEOPLE,
 }
 
 # --- مسئول شیفت ---
@@ -54,7 +55,7 @@ LEAD_BTN_SETTINGS = "⚙️ تنظیمات مناطق من"
 
 LEAD_MENU_TEXTS = {
     LEAD_BTN_QUEUE, LEAD_BTN_GROUPS, LEAD_BTN_MEMBERS, LEAD_BTN_PENDING, LEAD_BTN_CALENDAR,
-    LEAD_BTN_REPORT, LEAD_BTN_MY_SHIFT, LEAD_BTN_TRANSFER, LEAD_BTN_SETTINGS, BTN_ADD_CONTACT,
+    LEAD_BTN_REPORT, LEAD_BTN_MY_SHIFT, LEAD_BTN_TRANSFER, LEAD_BTN_SETTINGS, BTN_ADD_PEOPLE,
 }
 
 # --- تکنسین ارشد ---
@@ -67,7 +68,7 @@ SNR_BTN_STATUS = "ℹ️ وضعیت من"
 
 SNR_MENU_TEXTS = {
     SNR_BTN_QUEUE, SNR_BTN_MEMBERS, SNR_BTN_PENDING, SNR_BTN_GROUPS, SNR_BTN_CALENDAR, SNR_BTN_STATUS,
-    BTN_ADD_CONTACT,
+    BTN_ADD_PEOPLE,
 }
 
 
@@ -111,8 +112,7 @@ def admin_menu(also_shift_lead: bool = False) -> MenuKeyboardMarkup:
     labels = [
         ADMIN_BTN_PENDING,
         ADMIN_BTN_MEMBERS,
-        BTN_ADD_CONTACT,
-        ADMIN_BTN_INVITE,
+        BTN_ADD_PEOPLE,
         ADMIN_BTN_CALENDAR,
         ADMIN_BTN_REPORT,
         ADMIN_BTN_SETTINGS,
@@ -131,7 +131,7 @@ def shift_lead_menu() -> MenuKeyboardMarkup:
         LEAD_BTN_GROUPS,
         LEAD_BTN_MEMBERS,
         LEAD_BTN_PENDING,
-        BTN_ADD_CONTACT,
+        BTN_ADD_PEOPLE,
         LEAD_BTN_CALENDAR,
         LEAD_BTN_REPORT,
         LEAD_BTN_MY_SHIFT,
@@ -148,7 +148,7 @@ def senior_menu() -> MenuKeyboardMarkup:
         SNR_BTN_QUEUE,
         SNR_BTN_MEMBERS,
         SNR_BTN_PENDING,
-        BTN_ADD_CONTACT,
+        BTN_ADD_PEOPLE,
         SNR_BTN_GROUPS,
         SNR_BTN_CALENDAR,
         SNR_BTN_STATUS,
@@ -225,16 +225,26 @@ def _add_two_col(kb: InlineKeyboardMarkup, buttons: list, start_row: int = 1) ->
 
 # ============================================================== اینلاین ====
 
-def role_select_keyboard(callback_prefix: str) -> InlineKeyboardMarkup:
+def role_select_keyboard(callback_prefix: str, allowed_roles: list = None) -> InlineKeyboardMarkup:
+    """انتخاب نقش. allowed_roles مثل ['op','tech','snr','lead'] — اگر None همه."""
     kb = InlineKeyboardMarkup()
+    items = list(config.ROLE_LABELS.items())
+    if allowed_roles is not None:
+        allowed = set(allowed_roles)
+        items = [(c, lab) for c, lab in items if c in allowed]
     buttons = [
         InlineKeyboardButton(text=f"نقش: {label}", callback_data=f"{callback_prefix}:{code}")
-        for code, label in config.ROLE_LABELS.items()
+        for code, label in items
     ]
-    buttons.append(
-        InlineKeyboardButton(text="بدون نقش", callback_data=f"{callback_prefix}:none")
-    )
     _add_two_col(kb, buttons)
+    return kb
+
+
+def add_people_method_keyboard() -> InlineKeyboardMarkup:
+    """دو روش افزودن: لینک دعوت یا دفترچه تلفن."""
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton(text="🔗 لینک دعوت", callback_data="addvia:link"), row=1)
+    kb.add(InlineKeyboardButton(text="📱 دفترچه تلفن", callback_data="addvia:contact"), row=2)
     return kb
 
 
