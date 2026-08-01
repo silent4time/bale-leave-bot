@@ -12,6 +12,7 @@ import shift
 import calendar_ui
 import keyboards as kb
 import states
+import report_pdf
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("leave_bot")
@@ -855,11 +856,51 @@ async def handle_admin_menu(message: Message, author, text: str):
         )
         return
 
+    
+async def send_leaves_report_pdf(message: Message, rows: list, *, title: str, letters: list = None):
+    """ساخت PDF جدول‌دار و ارسال به کاربر؛ در صورت خطا متن جدول ارسال می‌شود."""
+    letters = letters or []
+    # پیش‌پردازش روز مرخصی شمسی کوتاه
+    prepared = []
+    for r in rows:
+        item = dict(r)
+        try:
+            item["leave_date_fa"] = jalali.format_jalali_day_month(r["leave_date"])
+        except Exception:
+            item["leave_date_fa"] = str(r.get("leave_date") or "-")
+        prepared.append(item)
+    try:
+        pdf_bytes = await run_db(
+            report_pdf.build_leaves_pdf,
+            prepared,
+            letters=letters,
+            title=title,
+        )
+        from bale import InputFile
+        from datetime import datetime
+        fname = f"leave_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+        await message.reply_document(
+            InputFile(pdf_bytes, file_name=fname),
+            caption=f"📄 {title}\nتعداد: {len(rows)}",
+        )
+    except Exception:
+        logger.exception("pdf report failed; falling back to text table")
+        table = format_leaves_table(rows, letters=letters)
+        await message.reply(f"📊 {title}\n\n" + table)
+
+
     if text == kb.ADMIN_BTN_REPORT:
         rows = await run_db(db.list_all_future_leaves, today_str())
         if not rows:
             await message.reply("مرخصی فعالی (از امروز به بعد) ثبت نشده است.")
             return
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+        await send_leaves_report_pdf(
+            message, rows, title="گزارش مرخصی‌های فعال", letters=letters
+        )
+        return
         mode = await run_db(db.get_calendar_mode)
         cfg = await run_db(db.get_shift_config) if mode == "shift" else None
         letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
@@ -997,17 +1038,23 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
             u = await run_db(db.get_user, uid) if uid else None
             rid = r.get("region_id") or (u.get("region_id") if u else None)
             if rid in region_ids:
-                # اگر region_name خالی بود از user پر کن
-                if not r.get("region_name") and u:
+                item = dict(r)
+                if not item.get("region_name") and rid:
                     reg = await run_db(db.get_region, rid)
-                    r = dict(r)
-                    r["region_name"] = reg["name"] if reg else "-"
-                    if r.get("shift_index") is None and u.get("shift_index") is not None:
-                        r["shift_index"] = u["shift_index"]
-                filtered.append(r)
+                    item["region_name"] = reg["name"] if reg else "-"
+                if item.get("shift_index") is None and u and u.get("shift_index") is not None:
+                    item["shift_index"] = u["shift_index"]
+                filtered.append(item)
         if not filtered:
             await message.reply("مرخصی فعالی در مناطق شما نیست.")
             return
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+        await send_leaves_report_pdf(
+            message, filtered, title="گزارش مرخصی مناطق من", letters=letters
+        )
+        return
         mode = await run_db(db.get_calendar_mode)
         cfg = await run_db(db.get_shift_config) if mode == "shift" else None
         letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
