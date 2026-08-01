@@ -604,8 +604,19 @@ def settings_keyboard(current_mode: str, *, is_admin: bool = True, shift_count: 
             row=row,
         )
         row += 1
+        if current_mode == "shift" and shift_count:
+            kb.add(
+                InlineKeyboardButton(text="⚙️ تنظیمات شیفت‌ها (مسئول و مناطق)", callback_data="settings_shifts"),
+                row=row,
+            )
+            row += 1
         kb.add(
             InlineKeyboardButton(text="👔 مسئولان شیفت", callback_data="settings_shiftleads"),
+            row=row,
+        )
+        row += 1
+        kb.add(
+            InlineKeyboardButton(text="🏷 واژه‌های منطقه/گروه", callback_data="settings_terms"),
             row=row,
         )
         row += 1

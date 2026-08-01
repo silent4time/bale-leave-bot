@@ -306,6 +306,55 @@ def set_setting(key: str, value):
     inv_settings()
 
 
+
+def get_term_region() -> str:
+    return get_setting("term_region", "منطقه کاری") or "منطقه کاری"
+
+
+def get_term_group() -> str:
+    return get_setting("term_group", "گروه کاری") or "گروه کاری"
+
+
+def set_term_region(name: str):
+    set_setting("term_region", (name or "منطقه کاری").strip())
+
+
+def set_term_group(name: str):
+    set_setting("term_group", (name or "گروه کاری").strip())
+
+
+def region_group_stats(region_id: int) -> dict:
+    """تعداد اپراتور / تکنسین / ارشد در یک منطقه."""
+    with _conn() as con:
+        rows = con.execute(
+            """
+            SELECT role, is_senior, COUNT(*) AS c
+            FROM users
+            WHERE region_id = ? AND approved = 1 AND IFNULL(is_admin,0)=0
+              AND IFNULL(is_shift_lead,0)=0
+            GROUP BY role, is_senior
+            """,
+            (region_id,),
+        ).fetchall()
+    op = tech = snr = 0
+    for r in rows:
+        if r["is_senior"]:
+            snr += r["c"]
+        elif r["role"] == "op":
+            op += r["c"]
+        elif r["role"] == "tech":
+            tech += r["c"]
+        elif r["role"] == "snr":
+            snr += r["c"]
+    return {"op": op, "tech": tech, "snr": snr}
+
+
+def list_leads_for_shift(shift_index: int) -> list:
+    """مسئولان شیفتِ یک شیفت خاص (users.shift_index)."""
+    leads = list_shift_leads()
+    return [L for L in leads if L.get("shift_index") is not None and int(L["shift_index"]) == int(shift_index)]
+
+
 def get_calendar_mode() -> str:
     return get_setting("calendar_mode", "workday")
 
@@ -1335,7 +1384,7 @@ def list_pending_for_senior(region_id: int, limit: int = 100):
 
 
 def list_pending_for_admin(limit: int = 100):
-    """صف تایید مدیر: فقط درخواست تکنسین‌های ارشد."""
+    """صف تایید مدیر: مرخصی مسئولان شیفت (+ اگر مسئولی نبود ارشدها)."""
     with _conn() as con:
         rows = con.execute(
             """
@@ -1345,12 +1394,38 @@ def list_pending_for_admin(limit: int = 100):
             JOIN users u ON u.user_id = l.user_id
             LEFT JOIN groups g ON g.id = u.group_id
             LEFT JOIN regions r ON r.id = u.region_id
-            WHERE u.is_senior = 1
+            WHERE u.is_shift_lead = 1
               AND l.status IN ('pending', 'reviewing')
             ORDER BY l.requested_at
             LIMIT ?
             """,
             (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_pending_for_shift_lead(region_ids: list, limit: int = 100):
+    """صف مسئول شیفت: مرخصی ارشدهای مناطق تحت مدیریت."""
+    if not region_ids:
+        return []
+    placeholders = ",".join("?" for _ in region_ids)
+    with _conn() as con:
+        rows = con.execute(
+            f"""
+            SELECT l.*, u.first_name, u.last_name, g.name AS group_name,
+                   r.name AS region_name
+            FROM leaves l
+            JOIN users u ON u.user_id = l.user_id
+            LEFT JOIN groups g ON g.id = u.group_id
+            LEFT JOIN regions r ON r.id = u.region_id
+            WHERE u.region_id IN ({placeholders})
+              AND (u.is_senior = 1 OR u.role = 'snr')
+              AND IFNULL(u.is_shift_lead, 0) = 0
+              AND l.status IN ('pending', 'reviewing')
+            ORDER BY l.requested_at
+            LIMIT ?
+            """,
+            (*region_ids, limit),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1417,7 +1492,7 @@ def leaves_on_date_for_viewer(date_str: str, region_id: Optional[int] = None):
 # ============================================================== مسئول شیفت ====
 
 def get_max_shift_leads() -> int:
-    raw = get_setting("max_shift_leads", "0")
+    raw = get_setting("max_shift_leads", "10")
     try:
         return max(0, int(raw))
     except (TypeError, ValueError):
@@ -1551,7 +1626,8 @@ def appoint_shift_lead(
     already = bool(u.get("is_shift_lead"))
     if not already:
         cap = get_max_shift_leads()
-        if count_shift_leads() >= cap:
+        # 0 یا کمتر = بدون سقف
+        if cap > 0 and count_shift_leads() >= cap:
             raise ValueError(f"max shift leads reached ({cap})")
 
     with _conn() as con:
