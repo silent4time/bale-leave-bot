@@ -1431,6 +1431,303 @@ async def render_calendar_edit(callback: CallbackQuery, db_user: dict, year: int
 # ==========================================================================
 
 @client.event
+
+# === shift/settings handlers ===
+async def _term_region() -> str:
+    try:
+        return await _term_region()
+    except Exception:
+        return "منطقه کاری"
+
+async def _term_group() -> str:
+    try:
+        return await _term_group()
+    except Exception:
+        return "گروه کاری"
+
+async def _ui_reply(callback: CallbackQuery, text: str, components=None):
+    """همیشه پاسخ بده — اول edit، اگر نشد reply."""
+    try:
+        if components is not None:
+            await callback.message.edit(text, components=components)
+        else:
+            await callback.message.edit(text)
+        return
+    except Exception:
+        pass
+    try:
+        if components is not None:
+            await callback.message.reply(text, components=components)
+        else:
+            await callback.message.reply(text)
+    except Exception:
+        logger.exception("ui reply failed")
+
+
+async def cb_settings_terms(callback: CallbackQuery):
+    try:
+        tr = await _term_region()
+        tg = await _term_group()
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        kb_i = InlineKeyboardMarkup()
+        kb_i.add(InlineKeyboardButton(text=f"تغییر: {tr}", callback_data="settings_term_region"), row=1)
+        kb_i.add(InlineKeyboardButton(text=f"تغییر: {tg}", callback_data="settings_term_group"), row=2)
+        await _ui_reply(callback, f"واژه‌های قابل تغییر:\n• منطقه: {tr}\n• گروه: {tg}", kb_i)
+    except Exception:
+        logger.exception("settings_terms failed")
+        await _ui_reply(callback, "خطا در باز کردن واژه‌ها. اگر تازه آپدیت کردید، database.py را هم جایگزین کنید.")
+
+
+
+async def cb_settings_shifts(callback: CallbackQuery):
+    """لیست شیفت‌ها — تنها نقطهٔ ورود مدیریت هر شیفت."""
+    cfg = await run_db(db.get_shift_config)
+    if not cfg:
+        await _ui_reply(callback, "ابتدا چرخهٔ شیفت را با «پیکربندی کامل چرخه» بسازید.")
+        return
+    letters = shift.shift_letters(cfg["shift_count"])
+    from bale import InlineKeyboardMarkup, InlineKeyboardButton
+    kb_i = InlineKeyboardMarkup()
+    for i, letter in enumerate(letters):
+        try:
+            leads = await run_db(db.list_leads_for_shift, i)
+        except Exception:
+            leads = []
+        n = len(leads) if leads else 0
+        kb_i.add(
+            InlineKeyboardButton(
+                text=f"شیفت {letter}  —  {n} مسئول",
+                callback_data=f"shmgmt:{i}",
+            ),
+            row=i + 1,
+        )
+    await _ui_reply(callback, "⚙️ تنظیمات شیفت‌ها\nیک شیفت را انتخاب کنید:", kb_i)
+
+
+async def cb_shift_mgmt(callback: CallbackQuery, data: str):
+    """پنل یک شیفت: روز کاری + مسئولان + مناطق + آمار."""
+    try:
+        idx = int(data.split(":")[1])
+    except (IndexError, ValueError):
+        await _ui_reply(callback, "دکمه نامعتبر.")
+        return
+    cfg = await run_db(db.get_shift_config)
+    if not cfg:
+        await _ui_reply(callback, "چرخهٔ شیفت پیکربندی نشده.")
+        return
+    letters = shift.shift_letters(cfg["shift_count"])
+    letter = letters[idx] if idx < len(letters) else str(idx)
+    try:
+        leads = await run_db(db.list_leads_for_shift, idx) or []
+    except Exception:
+        leads = []
+    try:
+        cur_slot = _shift_slot_index(cfg, idx, today_str())
+        slot_name = cfg["labels"][cur_slot]["name"] if cfg.get("labels") else "?"
+    except Exception:
+        slot_name = "?"
+
+    from bale import InlineKeyboardMarkup, InlineKeyboardButton
+    kb_i = InlineKeyboardMarkup()
+    row = 1
+    kb_i.add(
+        InlineKeyboardButton(
+            text=f"📅 تعیین روز کاری (الان: {slot_name})",
+            callback_data=f"sfix:{idx}",
+        ),
+        row=row,
+    )
+    row += 1
+    kb_i.add(
+        InlineKeyboardButton(text="➕ تخصیص مسئول شیفت جدید", callback_data=f"shlead_add:{idx}"),
+        row=row,
+    )
+    row += 1
+
+    if not leads:
+        kb_i.add(InlineKeyboardButton(text="(هنوز مسئولی نیست)", callback_data="noop"), row=row)
+        row += 1
+    else:
+        for L in leads:
+            name = f"{L.get('first_name') or ''} {L.get('last_name') or ''}".strip() or str(L["user_id"])
+            regs = L.get("regions") or []
+            rnames = "، ".join(r.get("name", "") for r in regs if isinstance(r, dict)) or "بدون منطقه"
+            kb_i.add(
+                InlineKeyboardButton(text=f"👔 {name}", callback_data=f"shlead_regions:{L['user_id']}:{idx}"),
+                row=row,
+            )
+            row += 1
+            kb_i.add(
+                InlineKeyboardButton(
+                    text=f"🗺 مناطق «{name}»: {rnames[:24]}",
+                    callback_data=f"shlead_regions:{L['user_id']}:{idx}",
+                ),
+                row=row,
+            )
+            row += 1
+            kb_i.add(
+                InlineKeyboardButton(text=f"🗑 حذف «{name}»", callback_data=f"shlead_del:{L['user_id']}:{idx}"),
+                row=row,
+            )
+            row += 1
+            for r in regs:
+                if isinstance(r, dict) and r.get("id") is not None:
+                    kb_i.add(
+                        InlineKeyboardButton(
+                            text=f"ℹ️ آمار {r.get('name', '?')}",
+                            callback_data=f"shreg_info:{r['id']}",
+                        ),
+                        row=row,
+                    )
+                    row += 1
+
+    kb_i.add(InlineKeyboardButton(text="↩️ بازگشت به لیست شیفت‌ها", callback_data="settings_shifts"), row=row)
+    n = len(leads)
+    warn = "" if n >= 2 else "\n⚠️ پیشنهاد: حداقل ۲ مسئول برای هر شیفت."
+    await _ui_reply(
+        callback,
+        f"⚙️ شیفت {letter}\nامروز این شیفت روی «{slot_name}» است.\nمسئولان: {n}{warn}",
+        kb_i,
+    )
+
+
+async def cb_shlead_add(callback: CallbackQuery, data: str):
+    idx = int(data.split(":")[1])
+    users = await run_db(db.list_all_active_users) or []
+    from bale import InlineKeyboardMarkup, InlineKeyboardButton
+    kb_i = InlineKeyboardMarkup()
+    row = 1
+    count = 0
+    for u in users:
+        if u.get("is_shift_lead") or u.get("is_admin"):
+            continue
+        name = f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip() or str(u["user_id"])
+        kb_i.add(InlineKeyboardButton(text=name, callback_data=f"shlead_pick:{u['user_id']}:{idx}"), row=row)
+        row += 1
+        count += 1
+        if count >= 40:
+            break
+    kb_i.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data=f"shmgmt:{idx}"), row=row)
+    if count == 0:
+        await _ui_reply(callback, "کاربر فعالی برای انتصاب نیست. ابتدا اعضا را تایید کنید.", kb_i)
+    else:
+        await _ui_reply(callback, "کاربر را برای مسئول شیفت انتخاب کنید:", kb_i)
+
+
+async def cb_shlead_pick(callback: CallbackQuery, data: str):
+    parts = data.split(":")
+    uid, idx = int(parts[1]), int(parts[2])
+    regions = await run_db(db.list_regions) or []
+    if not regions:
+        await _ui_reply(callback, "ابتدا منطقه بسازید.")
+        return
+    states.set_state(
+        callback.user.id,
+        action="shl_pick_regions",
+        target_uid=uid,
+        shift_index=idx,
+        selected=[],
+    )
+    await _ui_reply(
+        callback,
+        "مناطق تحت مدیریت این مسئول را تیک بزنید، سپس تأیید کنید:",
+        kb.multi_region_toggle_keyboard(regions, set(), "shl_tog", done_callback="shl_done"),
+    )
+
+
+async def cb_shlead_regions_start(callback: CallbackQuery, data: str):
+    parts = data.split(":")
+    uid, idx = int(parts[1]), int(parts[2])
+    regions = await run_db(db.list_regions) or []
+    current = set(await run_db(db.list_shift_lead_region_ids, uid) or [])
+    states.set_state(
+        callback.user.id,
+        action="shl_pick_regions",
+        target_uid=uid,
+        shift_index=idx,
+        selected=list(current),
+    )
+    await _ui_reply(
+        callback,
+        "مناطق تحت مدیریت را ویرایش کنید، سپس تأیید:",
+        kb.multi_region_toggle_keyboard(regions, current, "shl_tog", done_callback="shl_done"),
+    )
+
+
+async def cb_shl_tog(callback: CallbackQuery, data: str):
+    rid = int(data.split(":")[1])
+    st = states.get_state(callback.user.id) or {}
+    if st.get("action") != "shl_pick_regions":
+        await _ui_reply(callback, "جلسه منقضی شده؛ دوباره از تنظیمات شیفت‌ها وارد شوید.")
+        return
+    selected = set(st.get("selected") or [])
+    if rid in selected:
+        selected.discard(rid)
+    else:
+        selected.add(rid)
+    states.set_state(
+        callback.user.id,
+        action="shl_pick_regions",
+        target_uid=st.get("target_uid"),
+        shift_index=st.get("shift_index"),
+        selected=list(selected),
+    )
+    regions = await run_db(db.list_regions) or []
+    await _ui_reply(
+        callback,
+        f"انتخاب‌شده: {len(selected)} منطقه — تیک بزنید و تأیید کنید:",
+        kb.multi_region_toggle_keyboard(regions, selected, "shl_tog", done_callback="shl_done"),
+    )
+
+
+async def cb_shl_done(callback: CallbackQuery, data: str):
+    st = states.get_state(callback.user.id) or {}
+    if st.get("action") != "shl_pick_regions":
+        await _ui_reply(callback, "جلسه منقضی شده.")
+        return
+    selected = st.get("selected") or []
+    if not selected:
+        await _ui_reply(callback, "حداقل یک منطقه لازم است.")
+        return
+    uid = int(st["target_uid"])
+    idx = int(st.get("shift_index") or 0)
+    try:
+        await run_db(db.appoint_shift_lead, uid, selected, idx)
+    except ValueError as e:
+        await _ui_reply(callback, fa_error(e))
+        return
+    states.clear_state(callback.user.id)
+    await _ui_reply(callback, "✅ مسئول شیفت و مناطق ذخیره شد.")
+    await cb_shift_mgmt(callback, f"shmgmt:{idx}")
+
+
+async def cb_shlead_del(callback: CallbackQuery, data: str):
+    parts = data.split(":")
+    uid, idx = int(parts[1]), int(parts[2])
+    await run_db(db.remove_shift_lead, uid)
+    await _ui_reply(callback, "✅ مسئول شیفت حذف شد.")
+    await cb_shift_mgmt(callback, f"shmgmt:{idx}")
+
+
+async def cb_shreg_info(callback: CallbackQuery, data: str):
+    rid = int(data.split(":")[1])
+    region = await run_db(db.get_region, rid)
+    stats = await run_db(db.region_group_stats, rid) or {}
+    groups = await run_db(db.list_member_groups, rid) or []
+    term_r = await _term_region()
+    term_g = await _term_group()
+    lines = [f"• {g['name']} (ظرفیت {g['max_concurrent']})" for g in groups]
+    text = (
+        f"{term_r}: {region['name'] if region else rid}\n"
+        f"ارشد: {stats.get('snr', 0)} | تکنسین: {stats.get('tech', 0)} | اپراتور: {stats.get('op', 0)}\n"
+        f"{term_g}ها:\n" + ("\n".join(lines) if lines else "—")
+    )
+    await _ui_reply(callback, text)
+
+
+
+
+
 async def on_callback(callback: CallbackQuery):
     data = callback.data or ""
     if data == "noop":
@@ -2845,297 +3142,4 @@ if __name__ == "__main__":
 
 
 # ========================================================= مدیریت شیفت‌ها (تنظیمات)
-
-async def _term_region() -> str:
-    try:
-        return await _term_region()
-    except Exception:
-        return "منطقه کاری"
-
-async def _term_group() -> str:
-    try:
-        return await _term_group()
-    except Exception:
-        return "گروه کاری"
-
-async def _ui_reply(callback: CallbackQuery, text: str, components=None):
-    """همیشه پاسخ بده — اول edit، اگر نشد reply."""
-    try:
-        if components is not None:
-            await callback.message.edit(text, components=components)
-        else:
-            await callback.message.edit(text)
-        return
-    except Exception:
-        pass
-    try:
-        if components is not None:
-            await callback.message.reply(text, components=components)
-        else:
-            await callback.message.reply(text)
-    except Exception:
-        logger.exception("ui reply failed")
-
-
-async def cb_settings_terms(callback: CallbackQuery):
-    try:
-        tr = await _term_region()
-        tg = await _term_group()
-        from bale import InlineKeyboardMarkup, InlineKeyboardButton
-        kb_i = InlineKeyboardMarkup()
-        kb_i.add(InlineKeyboardButton(text=f"تغییر: {tr}", callback_data="settings_term_region"), row=1)
-        kb_i.add(InlineKeyboardButton(text=f"تغییر: {tg}", callback_data="settings_term_group"), row=2)
-        await _ui_reply(callback, f"واژه‌های قابل تغییر:\n• منطقه: {tr}\n• گروه: {tg}", kb_i)
-    except Exception:
-        logger.exception("settings_terms failed")
-        await _ui_reply(callback, "خطا در باز کردن واژه‌ها. اگر تازه آپدیت کردید، database.py را هم جایگزین کنید.")
-
-
-
-async def cb_settings_shifts(callback: CallbackQuery):
-    """لیست شیفت‌ها — تنها نقطهٔ ورود مدیریت هر شیفت."""
-    cfg = await run_db(db.get_shift_config)
-    if not cfg:
-        await _ui_reply(callback, "ابتدا چرخهٔ شیفت را با «پیکربندی کامل چرخه» بسازید.")
-        return
-    letters = shift.shift_letters(cfg["shift_count"])
-    from bale import InlineKeyboardMarkup, InlineKeyboardButton
-    kb_i = InlineKeyboardMarkup()
-    for i, letter in enumerate(letters):
-        try:
-            leads = await run_db(db.list_leads_for_shift, i)
-        except Exception:
-            leads = []
-        n = len(leads) if leads else 0
-        kb_i.add(
-            InlineKeyboardButton(
-                text=f"شیفت {letter}  —  {n} مسئول",
-                callback_data=f"shmgmt:{i}",
-            ),
-            row=i + 1,
-        )
-    await _ui_reply(callback, "⚙️ تنظیمات شیفت‌ها\nیک شیفت را انتخاب کنید:", kb_i)
-
-
-async def cb_shift_mgmt(callback: CallbackQuery, data: str):
-    """پنل یک شیفت: روز کاری + مسئولان + مناطق + آمار."""
-    try:
-        idx = int(data.split(":")[1])
-    except (IndexError, ValueError):
-        await _ui_reply(callback, "دکمه نامعتبر.")
-        return
-    cfg = await run_db(db.get_shift_config)
-    if not cfg:
-        await _ui_reply(callback, "چرخهٔ شیفت پیکربندی نشده.")
-        return
-    letters = shift.shift_letters(cfg["shift_count"])
-    letter = letters[idx] if idx < len(letters) else str(idx)
-    try:
-        leads = await run_db(db.list_leads_for_shift, idx) or []
-    except Exception:
-        leads = []
-    try:
-        cur_slot = _shift_slot_index(cfg, idx, today_str())
-        slot_name = cfg["labels"][cur_slot]["name"] if cfg.get("labels") else "?"
-    except Exception:
-        slot_name = "?"
-
-    from bale import InlineKeyboardMarkup, InlineKeyboardButton
-    kb_i = InlineKeyboardMarkup()
-    row = 1
-    kb_i.add(
-        InlineKeyboardButton(
-            text=f"📅 تعیین روز کاری (الان: {slot_name})",
-            callback_data=f"sfix:{idx}",
-        ),
-        row=row,
-    )
-    row += 1
-    kb_i.add(
-        InlineKeyboardButton(text="➕ تخصیص مسئول شیفت جدید", callback_data=f"shlead_add:{idx}"),
-        row=row,
-    )
-    row += 1
-
-    if not leads:
-        kb_i.add(InlineKeyboardButton(text="(هنوز مسئولی نیست)", callback_data="noop"), row=row)
-        row += 1
-    else:
-        for L in leads:
-            name = f"{L.get('first_name') or ''} {L.get('last_name') or ''}".strip() or str(L["user_id"])
-            regs = L.get("regions") or []
-            rnames = "، ".join(r.get("name", "") for r in regs if isinstance(r, dict)) or "بدون منطقه"
-            kb_i.add(
-                InlineKeyboardButton(text=f"👔 {name}", callback_data=f"shlead_regions:{L['user_id']}:{idx}"),
-                row=row,
-            )
-            row += 1
-            kb_i.add(
-                InlineKeyboardButton(
-                    text=f"🗺 مناطق «{name}»: {rnames[:24]}",
-                    callback_data=f"shlead_regions:{L['user_id']}:{idx}",
-                ),
-                row=row,
-            )
-            row += 1
-            kb_i.add(
-                InlineKeyboardButton(text=f"🗑 حذف «{name}»", callback_data=f"shlead_del:{L['user_id']}:{idx}"),
-                row=row,
-            )
-            row += 1
-            for r in regs:
-                if isinstance(r, dict) and r.get("id") is not None:
-                    kb_i.add(
-                        InlineKeyboardButton(
-                            text=f"ℹ️ آمار {r.get('name', '?')}",
-                            callback_data=f"shreg_info:{r['id']}",
-                        ),
-                        row=row,
-                    )
-                    row += 1
-
-    kb_i.add(InlineKeyboardButton(text="↩️ بازگشت به لیست شیفت‌ها", callback_data="settings_shifts"), row=row)
-    n = len(leads)
-    warn = "" if n >= 2 else "\n⚠️ پیشنهاد: حداقل ۲ مسئول برای هر شیفت."
-    await _ui_reply(
-        callback,
-        f"⚙️ شیفت {letter}\nامروز این شیفت روی «{slot_name}» است.\nمسئولان: {n}{warn}",
-        kb_i,
-    )
-
-
-async def cb_shlead_add(callback: CallbackQuery, data: str):
-    idx = int(data.split(":")[1])
-    users = await run_db(db.list_all_active_users) or []
-    from bale import InlineKeyboardMarkup, InlineKeyboardButton
-    kb_i = InlineKeyboardMarkup()
-    row = 1
-    count = 0
-    for u in users:
-        if u.get("is_shift_lead") or u.get("is_admin"):
-            continue
-        name = f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip() or str(u["user_id"])
-        kb_i.add(InlineKeyboardButton(text=name, callback_data=f"shlead_pick:{u['user_id']}:{idx}"), row=row)
-        row += 1
-        count += 1
-        if count >= 40:
-            break
-    kb_i.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data=f"shmgmt:{idx}"), row=row)
-    if count == 0:
-        await _ui_reply(callback, "کاربر فعالی برای انتصاب نیست. ابتدا اعضا را تایید کنید.", kb_i)
-    else:
-        await _ui_reply(callback, "کاربر را برای مسئول شیفت انتخاب کنید:", kb_i)
-
-
-async def cb_shlead_pick(callback: CallbackQuery, data: str):
-    parts = data.split(":")
-    uid, idx = int(parts[1]), int(parts[2])
-    regions = await run_db(db.list_regions) or []
-    if not regions:
-        await _ui_reply(callback, "ابتدا منطقه بسازید.")
-        return
-    states.set_state(
-        callback.user.id,
-        action="shl_pick_regions",
-        target_uid=uid,
-        shift_index=idx,
-        selected=[],
-    )
-    await _ui_reply(
-        callback,
-        "مناطق تحت مدیریت این مسئول را تیک بزنید، سپس تأیید کنید:",
-        kb.multi_region_toggle_keyboard(regions, set(), "shl_tog", done_callback="shl_done"),
-    )
-
-
-async def cb_shlead_regions_start(callback: CallbackQuery, data: str):
-    parts = data.split(":")
-    uid, idx = int(parts[1]), int(parts[2])
-    regions = await run_db(db.list_regions) or []
-    current = set(await run_db(db.list_shift_lead_region_ids, uid) or [])
-    states.set_state(
-        callback.user.id,
-        action="shl_pick_regions",
-        target_uid=uid,
-        shift_index=idx,
-        selected=list(current),
-    )
-    await _ui_reply(
-        callback,
-        "مناطق تحت مدیریت را ویرایش کنید، سپس تأیید:",
-        kb.multi_region_toggle_keyboard(regions, current, "shl_tog", done_callback="shl_done"),
-    )
-
-
-async def cb_shl_tog(callback: CallbackQuery, data: str):
-    rid = int(data.split(":")[1])
-    st = states.get_state(callback.user.id) or {}
-    if st.get("action") != "shl_pick_regions":
-        await _ui_reply(callback, "جلسه منقضی شده؛ دوباره از تنظیمات شیفت‌ها وارد شوید.")
-        return
-    selected = set(st.get("selected") or [])
-    if rid in selected:
-        selected.discard(rid)
-    else:
-        selected.add(rid)
-    states.set_state(
-        callback.user.id,
-        action="shl_pick_regions",
-        target_uid=st.get("target_uid"),
-        shift_index=st.get("shift_index"),
-        selected=list(selected),
-    )
-    regions = await run_db(db.list_regions) or []
-    await _ui_reply(
-        callback,
-        f"انتخاب‌شده: {len(selected)} منطقه — تیک بزنید و تأیید کنید:",
-        kb.multi_region_toggle_keyboard(regions, selected, "shl_tog", done_callback="shl_done"),
-    )
-
-
-async def cb_shl_done(callback: CallbackQuery, data: str):
-    st = states.get_state(callback.user.id) or {}
-    if st.get("action") != "shl_pick_regions":
-        await _ui_reply(callback, "جلسه منقضی شده.")
-        return
-    selected = st.get("selected") or []
-    if not selected:
-        await _ui_reply(callback, "حداقل یک منطقه لازم است.")
-        return
-    uid = int(st["target_uid"])
-    idx = int(st.get("shift_index") or 0)
-    try:
-        await run_db(db.appoint_shift_lead, uid, selected, idx)
-    except ValueError as e:
-        await _ui_reply(callback, fa_error(e))
-        return
-    states.clear_state(callback.user.id)
-    await _ui_reply(callback, "✅ مسئول شیفت و مناطق ذخیره شد.")
-    await cb_shift_mgmt(callback, f"shmgmt:{idx}")
-
-
-async def cb_shlead_del(callback: CallbackQuery, data: str):
-    parts = data.split(":")
-    uid, idx = int(parts[1]), int(parts[2])
-    await run_db(db.remove_shift_lead, uid)
-    await _ui_reply(callback, "✅ مسئول شیفت حذف شد.")
-    await cb_shift_mgmt(callback, f"shmgmt:{idx}")
-
-
-async def cb_shreg_info(callback: CallbackQuery, data: str):
-    rid = int(data.split(":")[1])
-    region = await run_db(db.get_region, rid)
-    stats = await run_db(db.region_group_stats, rid) or {}
-    groups = await run_db(db.list_member_groups, rid) or []
-    term_r = await _term_region()
-    term_g = await _term_group()
-    lines = [f"• {g['name']} (ظرفیت {g['max_concurrent']})" for g in groups]
-    text = (
-        f"{term_r}: {region['name'] if region else rid}\n"
-        f"ارشد: {stats.get('snr', 0)} | تکنسین: {stats.get('tech', 0)} | اپراتور: {stats.get('op', 0)}\n"
-        f"{term_g}ها:\n" + ("\n".join(lines) if lines else "—")
-    )
-    await _ui_reply(callback, text)
-
-
 
