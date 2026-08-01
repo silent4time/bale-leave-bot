@@ -1705,7 +1705,7 @@ def managed_region_ids(user_id: int) -> list:
     ids = []
     if u.get("is_shift_lead"):
         ids += list_shift_lead_region_ids(user_id)
-    if u.get("is_senior") and u.get("region_id") and u["region_id"] not in ids:
+    if (u.get("is_senior") or u.get("role") == "snr") and u.get("region_id") and u["region_id"] not in ids:
         ids.append(u["region_id"])
     return ids
 

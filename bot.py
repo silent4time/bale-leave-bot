@@ -21,6 +21,15 @@ if not config.BOT_TOKEN:
     raise SystemExit("متغیر محیطی BALE_BOT_TOKEN تنظیم نشده است.")
 
 client = Bot(token=config.BOT_TOKEN)
+
+# برچسب‌های منو — مقاوم به نسخهٔ قدیمی keyboards
+ADD_PEOPLE_LABELS = (
+    getattr(kb, "BTN_ADD_PEOPLE", None),
+    getattr(kb, "BTN_ADD_CONTACT", None),
+    "➕ اضافه کردن افراد",
+    "📇 افزودن عضو با مخاطب",
+)
+ADD_PEOPLE_LABELS = tuple(x for x in ADD_PEOPLE_LABELS if x)
 _bot_username = {"value": None}
 
 
@@ -178,11 +187,17 @@ async def on_message(message: Message):
         return
 
     state = states.get_state(author.id)
-    if state and state.get("action") == "awaiting_contact" and text == kb.CONTACT_CANCEL_TEXT:
+    if state and state.get("action") == "awaiting_contact":
+        cancel_txt = getattr(kb, "CONTACT_CANCEL_TEXT", "❌ انصراف از افزودن مخاطب")
+        if text == cancel_txt:
+            states.clear_state(author.id)
+            db_user = await run_db(db.get_user, author.id)
+            await message.reply("لغو شد.", components=kb.menu_for_user(db_user))
+            return
+        # اگر کاربر دکمه منوی اصلی زد، از حالت مخاطب خارج شو
         states.clear_state(author.id)
-        db_user = await run_db(db.get_user, author.id)
-        await message.reply("لغو شد.", components=kb.menu_for_user(db_user))
-        return
+        # ادامه می‌دهد تا دکمه منو پردازش شود
+        state = None
     if state:
         consumed = await handle_stateful_text(message, author, text, state)
         if consumed:
@@ -193,7 +208,7 @@ async def on_message(message: Message):
         await message.reply("لطفاً ابتدا با دستور /start ثبت‌نام را تکمیل کنید.")
         return
 
-    if text in (kb.BTN_ADD_PEOPLE, getattr(kb, "BTN_ADD_CONTACT", ""), "➕ اضافه کردن افراد", "📇 افزودن عضو با مخاطب"):
+    if text in ADD_PEOPLE_LABELS:
         roles = allowed_add_roles(db_user)
         if not roles:
             await message.reply("شما اجازه‌ی افزودن عضو ندارید.")
@@ -2311,7 +2326,7 @@ async def on_callback(callback: CallbackQuery):
     except Exception:
         logger.exception("خطا در پردازش کال‌بک: %s", data)
         try:
-            await callback.message.reply(f"خطا در پردازش دکمه. جزئیات در لاگ سرور.\nکد: {data[:40]}")
+            await callback.message.reply(f"خطا در پردازش دکمه.\nکد: {data[:40]}")
         except Exception:
             pass
 
