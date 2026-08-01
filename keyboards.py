@@ -67,10 +67,11 @@ SNR_BTN_PENDING = "⏳ افراد در انتظار تایید"
 SNR_BTN_GROUPS = "📋 گروه‌های منطقه من"
 SNR_BTN_CALENDAR = "📅 تقویم منطقه من"
 SNR_BTN_STATUS = "ℹ️ وضعیت من"
+SNR_BTN_REPORT = "📊 گزارش مرخصی منطقه"
 
 SNR_MENU_TEXTS = {
     SNR_BTN_QUEUE, SNR_BTN_MEMBERS, SNR_BTN_PENDING, SNR_BTN_GROUPS, SNR_BTN_CALENDAR, SNR_BTN_STATUS,
-    BTN_ADD_PEOPLE, BTN_REGION_LEAVES, BTN_OVER_CAP_LEAVE,
+    SNR_BTN_REPORT, BTN_ADD_PEOPLE, BTN_REGION_LEAVES, BTN_OVER_CAP_LEAVE,
 }
 
 
@@ -159,6 +160,7 @@ def senior_menu() -> MenuKeyboardMarkup:
         BTN_OVER_CAP_LEAVE,
         SNR_BTN_GROUPS,
         SNR_BTN_CALENDAR,
+        SNR_BTN_REPORT,
         SNR_BTN_STATUS,
     ]
     kb = MenuKeyboardMarkup()
@@ -680,4 +682,17 @@ def color_picker_keyboard(group_id: int, colors: list = None) -> InlineKeyboardM
         for hex_c, name in colors
     ]
     _add_two_col(kb, buttons)
+    return kb
+
+
+def report_months_keyboard(months: list) -> InlineKeyboardMarkup:
+    """months: list of (jy, jm, label)"""
+    kb = InlineKeyboardMarkup()
+    row = 1
+    for jy, jm, label in months:
+        kb.add(
+            InlineKeyboardButton(text=label, callback_data=f"rptm:{jy}:{jm}"),
+            row=row,
+        )
+        row += 1
     return kb

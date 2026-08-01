@@ -1608,6 +1608,50 @@ def list_pending_review_queue(limit: int = 100):
         return [dict(r) for r in rows]
 
 
+
+def list_leaves_for_month(jy: int, jm: int, region_ids: list = None, limit: int = 500):
+    """مرخصی‌های یک ماه شمسی (همه وضعیت‌های فعال و رد/تایید برای گزارش).
+    region_ids=None → همه؛ وگرنه فقط کاربران آن مناطق.
+    """
+    prefix = f"{int(jy):04d}-{int(jm):02d}-"
+    with _conn() as con:
+        if region_ids is None:
+            rows = con.execute(
+                """
+                SELECT l.*, u.first_name, u.last_name, u.shift_index,
+                       g.name AS group_name, r.name AS region_name
+                FROM leaves l
+                JOIN users u ON u.user_id = l.user_id
+                LEFT JOIN groups g ON g.id = u.group_id
+                LEFT JOIN regions r ON r.id = u.region_id
+                WHERE l.leave_date LIKE ?
+                ORDER BY l.leave_date, u.last_name, u.first_name
+                LIMIT ?
+                """,
+                (prefix + "%", limit),
+            ).fetchall()
+        else:
+            if not region_ids:
+                return []
+            ph = ",".join("?" for _ in region_ids)
+            rows = con.execute(
+                f"""
+                SELECT l.*, u.first_name, u.last_name, u.shift_index,
+                       g.name AS group_name, r.name AS region_name
+                FROM leaves l
+                JOIN users u ON u.user_id = l.user_id
+                LEFT JOIN groups g ON g.id = u.group_id
+                LEFT JOIN regions r ON r.id = u.region_id
+                WHERE l.leave_date LIKE ?
+                  AND u.region_id IN ({ph})
+                ORDER BY l.leave_date, u.last_name, u.first_name
+                LIMIT ?
+                """,
+                (prefix + "%", *region_ids, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def list_all_future_leaves(from_date_str: str, limit: int = 200):
     with _conn() as con:
         rows = con.execute(

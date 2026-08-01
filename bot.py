@@ -888,6 +888,54 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
 
 
 
+
+def last_n_jalali_months(n: int = 6):
+    """از ماه جاری به عقب، n ماه: [(jy, jm, label), ...]"""
+    y, m, _ = jalali.today_jalali()
+    out = []
+    cy, cm = int(y), int(m)
+    for i in range(n):
+        yy, mm = cy, cm - i
+        while mm <= 0:
+            mm += 12
+            yy -= 1
+        label = f"{jalali.PERSIAN_MONTHS[mm - 1]} {yy}"
+        out.append((yy, mm, label))
+    return out
+
+
+async def resolve_report_region_ids(db_user: dict):
+    """محدوده گزارش بر اساس نقش."""
+    if not db_user:
+        return []
+    if db_user.get("is_admin"):
+        return None  # همه مناطق
+    if db_user.get("is_shift_lead"):
+        return await run_db(db.list_shift_lead_region_ids, db_user["user_id"]) or []
+    if db_user.get("is_senior") or db_user.get("role") == "snr":
+        rid = db_user.get("region_id")
+        return [rid] if rid else []
+    return []
+
+
+async def start_monthly_report_picker(message: Message, db_user: dict):
+    if not db_user or not (
+        db_user.get("is_admin")
+        or db_user.get("is_shift_lead")
+        or db_user.get("is_senior")
+        or db_user.get("role") == "snr"
+    ):
+        await message.reply("شما به بخش گزارش دسترسی ندارید.")
+        return
+    months = last_n_jalali_months(6)
+    await message.reply(
+        "📊 گزارش مرخصی ماهانه\n"
+        "یکی از ۶ ماه اخیر (شامل ماه جاری) را انتخاب کنید:\n"
+        "گزارش به‌صورت فایل PDF ارسال می‌شود.",
+        components=kb.report_months_keyboard(months),
+    )
+
+
 async def open_over_cap_calendar(message: Message, author, db_user: dict):
     """تقویم انتخاب؛ روزهای پر = مازاد، بقیه = عادی."""
     if not db_user:
@@ -1045,16 +1093,8 @@ async def handle_admin_menu(message: Message, author, text: str):
         return
 
     if text == kb.ADMIN_BTN_REPORT:
-        rows = await run_db(db.list_all_future_leaves, today_str())
-        if not rows:
-            await message.reply("مرخصی فعالی (از امروز به بعد) ثبت نشده است.")
-            return
-        mode = await run_db(db.get_calendar_mode)
-        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
-        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
-        await send_leaves_report_pdf(
-            message, rows, title="گزارش مرخصی‌های فعال", letters=letters
-        )
+        db_user = await run_db(db.get_user, author.id)
+        await start_monthly_report_picker(message, db_user)
         return
 
     if text == kb.ADMIN_BTN_SETTINGS:
@@ -1070,6 +1110,46 @@ async def handle_admin_menu(message: Message, author, text: str):
         return
 
     await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=kb.admin_menu())
+
+
+
+async def cb_report_month(callback: CallbackQuery, data: str):
+    """rptm:jy:jm — تولید PDF گزارش ماهانه با محدوده دسترسی."""
+    _, jy, jm = data.split(":")
+    jy, jm = int(jy), int(jm)
+    viewer = await run_db(db.get_user, callback.user.id)
+    if not viewer:
+        return
+    # دسترسی: مدیر / مسئول شیفت / ارشد
+    if not (
+        viewer.get("is_admin")
+        or viewer.get("is_shift_lead")
+        or viewer.get("is_senior")
+        or viewer.get("role") == "snr"
+    ):
+        await _ui_reply(callback, "شما به گزارش دسترسی ندارید.")
+        return
+    region_ids = await resolve_report_region_ids(viewer)
+    if region_ids is not None and len(region_ids) == 0:
+        await _ui_reply(callback, "محدوده منطقه‌ای برای گزارش تعریف نشده است.")
+        return
+    month_label = f"{jalali.PERSIAN_MONTHS[jm - 1]} {jy}"
+    await callback.message.reply(
+        f"⏳ ربات در حال تهیه گزارش «{month_label}» است.\n"
+        "لطفاً چند لحظه صبر کنید؛ فایل PDF به‌زودی ارسال می‌شود."
+    )
+    rows = await run_db(db.list_leaves_for_month, jy, jm, region_ids)
+    if not rows:
+        await callback.message.reply(f"برای {month_label} مرخصی ثبت‌شده‌ای یافت نشد.")
+        return
+    mode = await run_db(db.get_calendar_mode)
+    cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+    letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+    scope = "همه مناطق" if region_ids is None else "محدوده دسترسی شما"
+    title = f"گزارش مرخصی {month_label} — {scope}"
+    await send_leaves_report_pdf(
+        callback.message, rows, title=title, letters=letters
+    )
 
 
 async def send_leaves_report_pdf(message: Message, rows: list, *, title: str, letters: list = None):
@@ -1210,36 +1290,9 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
         return
 
     if text == kb.LEAD_BTN_REPORT:
-        rows = await run_db(db.list_all_future_leaves, today_str())
-        filtered = []
-        for r in rows:
-            uid = r.get("user_id")
-            u = await run_db(db.get_user, uid) if uid else None
-            rid = r.get("region_id") or (u.get("region_id") if u else None)
-            if rid in region_ids:
-                item = dict(r)
-                if not item.get("region_name") and rid:
-                    reg = await run_db(db.get_region, rid)
-                    item["region_name"] = reg["name"] if reg else "-"
-                if item.get("shift_index") is None and u and u.get("shift_index") is not None:
-                    item["shift_index"] = u["shift_index"]
-                filtered.append(item)
-        if not filtered:
-            await message.reply("مرخصی فعالی در مناطق شما نیست.")
-            return
-        mode = await run_db(db.get_calendar_mode)
-        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
-        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
-        await send_leaves_report_pdf(
-            message, filtered, title="گزارش مرخصی مناطق من", letters=letters
-        )
+        await start_monthly_report_picker(message, db_user)
         return
-        mode = await run_db(db.get_calendar_mode)
-        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
-        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
-        table = format_leaves_table(filtered, letters=letters)
-        await message.reply("📊 گزارش مناطق شما\n\n" + table)
-        return
+
 
     if text == kb.LEAD_BTN_MY_SHIFT:
         mode = await run_db(db.get_calendar_mode)
@@ -1279,6 +1332,10 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
 # ==========================================================================
 
 async def handle_senior_menu(message: Message, author, db_user: dict, text: str):
+    if text == getattr(kb, "SNR_BTN_REPORT", "📊 گزارش مرخصی منطقه"):
+        await start_monthly_report_picker(message, db_user)
+        return
+
     if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
         await show_region_leaves_status(message, db_user)
         return
@@ -2125,6 +2182,8 @@ async def on_callback(callback: CallbackQuery):
             await cb_batch_commit(callback)
         elif data == "batch_edit":
             await callback.message.reply("وضعیت‌ها ذخیره شده‌اند. می‌توانید دوباره آیکون‌ها را تغییر دهید.")
+        elif data.startswith("rptm:"):
+            await cb_report_month(callback, data)
         elif data.startswith("addvia:"):
             await cb_addvia(callback, data)
         elif data.startswith("invrole:"):
