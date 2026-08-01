@@ -2471,27 +2471,43 @@ async def cb_confirm_submit(callback: CallbackQuery, data: str):
 async def finalize_leave_submit(uid: int, y: int, m: int, dates: list, note: str = None):
     db_user = await run_db(db.get_user, uid)
     if not db_user:
-        return
+        return "کاربر پیدا نشد."
     submitted = []
+    blocked = []  # (date_str, owners)
     batch_id = secrets.token_hex(8) if len(dates) > 1 else None
     for date_str in dates:
-        status, lid = await run_db(db.request_leave, uid, date_str, note, batch_id)
+        status, extra = await run_db(db.request_leave, uid, date_str, note, batch_id)
         if status == "created":
-            submitted.append((date_str, lid))
+            submitted.append((date_str, extra))
+        elif status == "full":
+            blocked.append((date_str, extra or []))
     sel = states.get_selection(uid, y, m)
     sel["to_submit"].clear()
     states.clear_state(uid)
 
+    parts = []
+    if blocked:
+        for date_str, owners in blocked:
+            names = "، ".join(display_name(o) for o in owners) if owners else "-"
+            parts.append(
+                f"❌ {jalali.format_jalali(date_str)}: ظرفیت تکمیل است. "
+                f"دارنده(های) مرخصی: {names}\n"
+                "درخواستی ثبت نشد و برای مسئول ارسال نشد."
+            )
     if submitted:
         dates_txt = "، ".join(jalali.format_jalali(d) for d, _ in submitted)
-        # اطلاع به کاربر از طریق همان چت — caller باید message داشته باشد
         if len(submitted) > 1:
             await notify_leave_batch(db_user, submitted)
         else:
             for date_str, lid in submitted:
                 await notify_admin_new_leave_request(db_user, date_str, lid)
-        return f"📝 درخواست مرخصیِ روز(های) {dates_txt} ثبت شد و برای بررسی ارسال شد."
-    return "روزی برای ثبت انتخاب نشده بود یا از قبل ثبت شده است."
+        parts.append(
+            f"📝 درخواست مرخصیِ روز(های) {dates_txt} ثبت شد و برای بررسی ارسال شد."
+        )
+    if not parts:
+        return "روزی برای ثبت انتخاب نشده بود یا از قبل ثبت شده است."
+    return "\n\n".join(parts)
+
 
 
 async def cb_confirm_cancel(callback: CallbackQuery, data: str):
@@ -3642,11 +3658,19 @@ async def cb_quick_leave(callback: CallbackQuery, data: str):
         if cap.get("remaining", 0) <= 0:
             await _ui_reply(callback, f"ظرفیت گروه پر است ({cap['used']}/{cap['max']}).")
             return
-    status, lid = await run_db(db.request_leave, uid, date_str, None, None)
+    status, extra = await run_db(db.request_leave, uid, date_str, None, None)
+    if status == "full":
+        names = "، ".join(display_name(o) for o in (extra or [])) if extra else "-"
+        await _ui_reply(
+            callback,
+            f"❌ ظرفیت تکمیل است.\nدارنده(های) مرخصی: {names}\n"
+            "درخواستی ثبت نشد و برای مسئول ارسال نشد.",
+        )
+        return
     if status != "created":
         await _ui_reply(callback, "قبلاً برای این روز ثبت شده است.")
         return
-    await notify_admin_new_leave_request(viewer, date_str, lid)
+    await notify_admin_new_leave_request(viewer, date_str, extra)
     await _ui_reply(
         callback,
         f"📝 درخواست مرخصی {jalali.format_jalali(date_str)} ثبت شد "

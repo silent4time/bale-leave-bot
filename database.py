@@ -1158,8 +1158,40 @@ def get_user_leave_on_date(user_id: int, date_str: str):
 
 def request_leave(user_id: int, date_str: str, note_user: str = None, batch_id: str = None):
     """
-    ثبت درخواست (pending). ظرفیت فقط در تایید نهایی چک می‌شود.
+    ثبت درخواست (pending).
+    اگر ظرفیت گروه/ارشدهای هم‌شیفت برای آن روز پر باشد → ("full", owners)
+    و هیچ درخواستی ساخته نمی‌شود (مسئول هم مطلع نمی‌شود).
     """
+    u = get_user(user_id)
+    if not u:
+        return ("not_found", None)
+
+    # --- پیش‌چک ظرفیت قبل از ساخت درخواست ---
+    is_snr = bool(u.get("is_senior") or u.get("role") == "snr")
+    is_lead = bool(u.get("is_shift_lead"))
+    is_admin = bool(u.get("is_admin"))
+
+    if not is_admin and not is_lead:
+        if is_snr and u.get("shift_index") is not None:
+            cap = senior_leave_capacity_on_date(int(u["shift_index"]), date_str)
+            # باقی‌مانده فقط برای approved شمرده می‌شود؛ اگر پر است، درخواست هم نساز
+            if cap.get("max", 0) > 0 and cap.get("remaining", 0) <= 0:
+                return ("full", cap.get("owners") or [])
+        elif u.get("group_id"):
+            cap = group_capacity_on_date(int(u["group_id"]), date_str)
+            if cap.get("max", 0) > 0 and cap.get("remaining", 0) <= 0:
+                # دارندگان مرخصی تاییدشده هم‌گروه
+                with _conn() as con:
+                    owners = con.execute(
+                        """
+                        SELECT u.user_id, u.first_name, u.last_name
+                        FROM leaves l JOIN users u ON u.user_id = l.user_id
+                        WHERE u.group_id = ? AND l.leave_date = ? AND l.status = 'approved'
+                        """,
+                        (u["group_id"], date_str),
+                    ).fetchall()
+                return ("full", [dict(o) for o in owners])
+
     with _conn() as con:
         row = con.execute(
             "SELECT * FROM leaves WHERE user_id = ? AND leave_date = ?",
@@ -1190,8 +1222,7 @@ def request_leave(user_id: int, date_str: str, note_user: str = None, batch_id: 
                 (now, note_user, batch_id, row["id"]),
             )
             result = ("created", row["id"])
-    u = get_user(user_id)
-    if u and u.get("region_id") is not None:
+    if u.get("region_id") is not None:
         inv_region(u["region_id"])
     inv_user(user_id)
     return result
