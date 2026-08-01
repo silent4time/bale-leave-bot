@@ -545,87 +545,56 @@ def batch_day_decision_keyboard(items: list) -> InlineKeyboardMarkup:
 
 
 def settings_keyboard(current_mode: str, *, is_admin: bool = True, shift_count: int = None) -> InlineKeyboardMarkup:
-    """
-    تنظیمات کامل فقط برای مدیر (سیکل، نوع تقویم، رنگ‌ها، سقف مسئول شیفت).
-    مسئول شیفت از منوی جداگانهٔ عملیاتی استفاده می‌کند.
-    shift_count: اگر تقویم شیفتی پیکربندی شده، تعداد شیفت‌ها — برای نمایش
-    یک دکمه‌ی تنظیمات مجزا برای هر شیفت (A, B, C, ...).
-    """
+    """منوی تنظیمات مدیر — مدیریت شیفت‌ها فقط از یک دکمه."""
     kb = InlineKeyboardMarkup()
     row = 1
-    if is_admin:
+    if not is_admin:
+        return kb
+    kb.add(
+        InlineKeyboardButton(
+            text=("☑️ " if current_mode == "workday" else "") + "🗓 نوع تقویم: روزکار",
+            callback_data="setmode:workday",
+        ),
+        row=row,
+    )
+    row += 1
+    kb.add(
+        InlineKeyboardButton(
+            text=("☑️ " if current_mode == "shift" else "") + "🗓 نوع تقویم: شیفتی",
+            callback_data="setmode:shift",
+        ),
+        row=row,
+    )
+    row += 1
+    if current_mode == "shift":
         kb.add(
-            InlineKeyboardButton(
-                text=("☑️ " if current_mode == "workday" else "") + "🗓 نوع تقویم: روزکار",
-                callback_data="setmode:workday",
-            ),
+            InlineKeyboardButton(text="🔧 پیکربندی کامل چرخه‌ی شیفت (از نو)", callback_data="cfgshift:start"),
             row=row,
         )
         row += 1
         kb.add(
             InlineKeyboardButton(
-                text=("☑️ " if current_mode == "shift" else "") + "🗓 نوع تقویم: شیفتی",
-                callback_data="setmode:shift",
+                text="⚙️ تنظیمات شیفت‌ها (روز کاری / مسئول / مناطق)",
+                callback_data="settings_shifts",
             ),
             row=row,
         )
         row += 1
-        if current_mode == "shift":
-            kb.add(
-                InlineKeyboardButton(text="🔧 پیکربندی کامل چرخه‌ی شیفت (از نو)", callback_data="cfgshift:start"),
-                row=row,
-            )
-            row += 1
-            if shift_count:
-                import shift as shift_mod
-                for idx, letter in enumerate(shift_mod.shift_letters(shift_count)):
-                    kb.add(
-                        InlineKeyboardButton(text=f"⚙️ تنظیمات شیفت {letter}", callback_data=f"sfix:{idx}"),
-                        row=row,
-                    )
-                    row += 1
-        kb.add(
-            InlineKeyboardButton(text="🎨 رنگ گروه‌ها", callback_data="settings_colors"),
-            row=row,
-        )
-        row += 1
-        kb.add(
-            InlineKeyboardButton(text="👔 سقف تعداد مسئول شیفت", callback_data="settings_max_leads"),
-            row=row,
-        )
-        row += 1
-        kb.add(
-            InlineKeyboardButton(text="🎓 سقف پیش‌فرضِ ارشد (برای مناطق بدون سقف اختصاصی)", callback_data="settings_max_seniors"),
-            row=row,
-        )
-        row += 1
-        kb.add(
-            InlineKeyboardButton(text="🗺 مدیریت مناطق (و گروه‌های هرکدام)", callback_data="settings_regions"),
-            row=row,
-        )
-        row += 1
-        if current_mode == "shift" and shift_count:
-            kb.add(
-                InlineKeyboardButton(text="⚙️ تنظیمات شیفت‌ها (مسئول و مناطق)", callback_data="settings_shifts"),
-                row=row,
-            )
-            row += 1
-        kb.add(
-            InlineKeyboardButton(text="👔 مسئولان شیفت", callback_data="settings_shiftleads"),
-            row=row,
-        )
-        row += 1
-        kb.add(
-            InlineKeyboardButton(text="🏷 واژه‌های منطقه/گروه", callback_data="settings_terms"),
-            row=row,
-        )
-        row += 1
-        kb.add(
-            InlineKeyboardButton(text="🔁 جایگزینی مدیر", callback_data="settings_replaceadmin"),
-            row=row,
-        )
-        row += 1
+    kb.add(InlineKeyboardButton(text="🗺 مدیریت مناطق و گروه‌ها", callback_data="settings_regions"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="👔 لیست همهٔ مسئولان شیفت", callback_data="settings_shiftleads"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="👔 سقف تعداد مسئول شیفت", callback_data="settings_max_leads"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🎓 سقف پیش‌فرض ارشد", callback_data="settings_max_seniors"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🎨 رنگ گروه‌ها", callback_data="settings_colors"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🏷 واژه‌های منطقه/گروه", callback_data="settings_terms"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🔁 جایگزینی مدیر", callback_data="settings_replaceadmin"), row=row)
     return kb
+
 
 
 def lead_settings_keyboard() -> InlineKeyboardMarkup:
