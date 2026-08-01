@@ -809,6 +809,51 @@ def set_max_seniors_per_region(n: int):
     set_setting("max_seniors_per_region", max(1, int(n)))
 
 
+
+def get_max_senior_leave_per_shift() -> int:
+    """حداکثر تعداد مرخصی هم‌زمان تکنسین‌ارشد در یک شیفت (در یک روز)."""
+    raw = get_setting("max_senior_leave_per_shift", "1")
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 1
+
+
+def set_max_senior_leave_per_shift(n: int):
+    set_setting("max_senior_leave_per_shift", max(0, int(n)))
+
+
+def count_senior_leaves_on_date_for_shift(shift_index: int, date_str: str, exclude_leave_id: int = None) -> list:
+    """ارشدهای هم‌شیفت که در این روز مرخصی approved دارند."""
+    with _conn() as con:
+        q = """
+            SELECT u.user_id, u.first_name, u.last_name, u.region_id
+            FROM leaves l
+            JOIN users u ON u.user_id = l.user_id
+            WHERE l.leave_date = ?
+              AND l.status = 'approved'
+              AND u.shift_index = ?
+              AND (IFNULL(u.is_senior,0)=1 OR u.role = 'snr')
+              AND IFNULL(u.is_shift_lead,0)=0
+              AND IFNULL(u.is_admin,0)=0
+        """
+        params = [date_str, int(shift_index)]
+        if exclude_leave_id is not None:
+            q += " AND l.id != ?"
+            params.append(exclude_leave_id)
+        rows = con.execute(q, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def senior_leave_capacity_on_date(shift_index: int, date_str: str) -> dict:
+    """ظرفیت مرخصی ارشدهای یک شیفت در یک روز."""
+    mx = get_max_senior_leave_per_shift()
+    owners = count_senior_leaves_on_date_for_shift(shift_index, date_str)
+    used = len(owners)
+    return {"max": mx, "used": used, "remaining": max(0, mx - used) if mx > 0 else 999, "owners": owners}
+
+
+
 def get_region_max_seniors(region_id: int) -> int:
     """سقف تکنسین ارشدِ مخصوصِ همین منطقه؛ اگر تنظیم نشده بود از سقف سراسری استفاده می‌شود."""
     region = get_region(region_id)
@@ -1169,27 +1214,62 @@ def try_set_status(leave_id: int, new_status: str, decided_by: int = None,
 
         if new_status == "approved":
             user = con.execute(
-                "SELECT group_id, region_id FROM users WHERE user_id = ?",
+                """
+                SELECT group_id, region_id, shift_index, is_senior, role,
+                       is_shift_lead, is_admin
+                FROM users WHERE user_id = ?
+                """,
                 (leave["user_id"],),
             ).fetchone()
-            if not user or not user["group_id"]:
+            if not user:
                 con.execute("COMMIT")
                 return "not_found", None
-            group = con.execute(
-                "SELECT max_concurrent FROM groups WHERE id = ?",
-                (user["group_id"],),
-            ).fetchone()
-            owners = con.execute(
-                """
-                SELECT u.user_id, u.first_name, u.last_name
-                FROM leaves l JOIN users u ON u.user_id = l.user_id
-                WHERE u.group_id = ? AND l.leave_date = ? AND l.status = 'approved' AND l.id != ?
-                """,
-                (user["group_id"], leave["leave_date"], leave_id),
-            ).fetchall()
-            if group and len(owners) >= group["max_concurrent"]:
-                con.execute("COMMIT")
-                return "full", [dict(o) for o in owners]
+
+            is_snr = bool(user["is_senior"] or user["role"] == "snr")
+            # --- ظرفیت ارشدهای هم‌شیفت ---
+            if is_snr and not user["is_shift_lead"] and not user["is_admin"]:
+                raw = con.execute(
+                    "SELECT value FROM settings WHERE key = ?",
+                    ("max_senior_leave_per_shift",),
+                ).fetchone()
+                try:
+                    cap = max(0, int(raw["value"])) if raw else 1
+                except (TypeError, ValueError):
+                    cap = 1
+                si = user["shift_index"]
+                if si is not None and cap > 0:
+                    owners = con.execute(
+                        """
+                        SELECT u.user_id, u.first_name, u.last_name
+                        FROM leaves l JOIN users u ON u.user_id = l.user_id
+                        WHERE l.leave_date = ? AND l.status = 'approved' AND l.id != ?
+                          AND u.shift_index = ?
+                          AND (IFNULL(u.is_senior,0)=1 OR u.role = 'snr')
+                          AND IFNULL(u.is_shift_lead,0)=0
+                          AND IFNULL(u.is_admin,0)=0
+                        """,
+                        (leave["leave_date"], leave_id, int(si)),
+                    ).fetchall()
+                    if len(owners) >= cap:
+                        con.execute("COMMIT")
+                        return "full", [dict(o) for o in owners]
+            # --- ظرفیت گروه (غیرارشد یا ارشد بدون شیفت) ---
+            elif user["group_id"]:
+                group = con.execute(
+                    "SELECT max_concurrent FROM groups WHERE id = ?",
+                    (user["group_id"],),
+                ).fetchone()
+                owners = con.execute(
+                    """
+                    SELECT u.user_id, u.first_name, u.last_name
+                    FROM leaves l JOIN users u ON u.user_id = l.user_id
+                    WHERE u.group_id = ? AND l.leave_date = ? AND l.status = 'approved' AND l.id != ?
+                    """,
+                    (user["group_id"], leave["leave_date"], leave_id),
+                ).fetchall()
+                if group and len(owners) >= group["max_concurrent"]:
+                    con.execute("COMMIT")
+                    return "full", [dict(o) for o in owners]
 
         con.execute(
             """
@@ -1463,6 +1543,50 @@ def list_all_future_leaves(from_date_str: str, limit: int = 200):
             LIMIT ?
             """,
             (from_date_str, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+
+
+def group_capacity_on_date(group_id: int, date_str: str) -> dict:
+    """ظرفیت گروه در یک روز: max, used (approved), remaining."""
+    with _conn() as con:
+        g = con.execute(
+            "SELECT max_concurrent FROM groups WHERE id = ?", (group_id,)
+        ).fetchone()
+        if not g:
+            return {"max": 0, "used": 0, "remaining": 0}
+        used = con.execute(
+            """
+            SELECT COUNT(*) AS c FROM leaves l
+            JOIN users u ON u.user_id = l.user_id
+            WHERE u.group_id = ? AND l.leave_date = ? AND l.status = 'approved'
+            """,
+            (group_id, date_str),
+        ).fetchone()["c"]
+        mx = int(g["max_concurrent"] or 0)
+        return {"max": mx, "used": used, "remaining": max(0, mx - used)}
+
+
+def list_region_active_leaves(region_id: int, from_date_str: str, limit: int = 200):
+    """مرخصی‌های فعال همهٔ اعضای یک منطقه از تاریخ مشخص."""
+    with _conn() as con:
+        rows = con.execute(
+            """
+            SELECT l.*, u.first_name, u.last_name, u.role, u.is_senior,
+                   g.name AS group_name, r.name AS region_name
+            FROM leaves l
+            JOIN users u ON u.user_id = l.user_id
+            LEFT JOIN groups g ON g.id = u.group_id
+            LEFT JOIN regions r ON r.id = u.region_id
+            WHERE u.region_id = ?
+              AND l.leave_date >= ?
+              AND l.status IN ('pending','reviewing','approved')
+            ORDER BY l.leave_date, g.name, u.first_name
+            LIMIT ?
+            """,
+            (region_id, from_date_str, limit),
         ).fetchall()
         return [dict(r) for r in rows]
 

@@ -586,7 +586,12 @@ def settings_keyboard(current_mode: str, *, is_admin: bool = True, shift_count: 
     row += 1
     kb.add(InlineKeyboardButton(text="👔 سقف تعداد مسئول شیفت", callback_data="settings_max_leads"), row=row)
     row += 1
-    kb.add(InlineKeyboardButton(text="🎓 سقف پیش‌فرض ارشد", callback_data="settings_max_seniors"), row=row)
+    kb.add(InlineKeyboardButton(text="🎓 سقف پیش‌فرض ارشد", callback_data="settings_max_seniors"),
+        row=row,
+    )
+    row += 1
+    kb.add(
+        InlineKeyboardButton(text="📅 ظرفیت مرخصی هم‌زمان ارشد در هر شیفت", callback_data="settings_max_snr_leave"), row=row)
     row += 1
     kb.add(InlineKeyboardButton(text="🎨 رنگ گروه‌ها", callback_data="settings_colors"), row=row)
     row += 1

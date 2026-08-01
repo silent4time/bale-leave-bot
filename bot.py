@@ -711,6 +711,20 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         )
         return True
 
+    if action == "set_max_snr_leave":
+        t = text.strip()
+        if not t.isdigit() or int(t) < 0:
+            await message.reply("یک عدد صحیح ≥ ۰ وارد کنید (۰ = نامحدود):")
+            return True
+        await run_db(db.set_max_senior_leave_per_shift, int(t))
+        states.clear_state(author.id)
+        await message.reply(
+            f"✅ ظرفیت مرخصی هم‌زمان ارشد در هر شیفت: {t}",
+            components=kb.admin_menu(),
+        )
+        return True
+
+
     if action == "set_region_max_seniors":
         t = text.strip()
         if not t.isdigit():
@@ -1898,6 +1912,10 @@ async def on_callback(callback: CallbackQuery):
             await cb_show_group_leaves(callback, data)
         elif data.startswith("dayinfo:"):
             await cb_dayinfo(callback, data)
+        elif data.startswith("snr_cancel:"):
+            await cb_snr_cancel_leave(callback, data)
+        elif data.startswith("quick_leave:"):
+            await cb_quick_leave(callback, data)
         elif data.startswith("decide:"):
             await cb_decide(callback, data)
         elif data.startswith("bdecide:"):
@@ -2096,6 +2114,14 @@ async def on_callback(callback: CallbackQuery):
             states.set_state(callback.user.id, action="set_max_seniors")
             cur = await run_db(db.get_max_seniors_per_region)
             await callback.message.reply(f"سقف فعلیِ تکنسین ارشد در هر منطقه: {cur}\nعدد جدید را وارد کنید:")
+        elif data == "settings_max_snr_leave":
+            states.set_state(callback.user.id, action="set_max_snr_leave")
+            cur = await run_db(db.get_max_senior_leave_per_shift)
+            await callback.message.reply(
+                f"ظرفیت مرخصی هم‌زمان ارشد در هر شیفت: {cur}\n"
+                "حداکثر چند ارشد هم‌شیفت در یک روز می‌توانند مرخصی تاییدشده داشته باشند.\n"
+                "عدد جدید (۰ = نامحدود):"
+            )
         elif data == "settings_colors":
             groups = await run_db(db.list_groups)
             if not groups:
@@ -2414,23 +2440,25 @@ async def cb_clear_selection(callback: CallbackQuery, data: str):
 
 
 async def cb_show_group_leaves(callback: CallbackQuery, data: str):
+    """همه اعضا مرخصی‌های فعال منطقه خود را می‌بینند (نه فقط هم‌گروه)."""
     _, y, m = data.split(":")
     y, m = int(y), int(m)
     uid = callback.user.id
     db_user = await run_db(db.get_user, uid)
-    if not db_user["group_id"]:
-        await callback.message.reply("شما هنوز به هیچ گروهی اختصاص داده نشده‌اید.")
+    rid = db_user.get("region_id") if db_user else None
+    if not rid:
+        await callback.message.reply("منطقه کاری شما مشخص نیست.")
     else:
-        rows = await run_db(db.list_group_leaves, db_user["group_id"], today_str())
+        rows = await run_db(db.list_region_active_leaves, rid, today_str())
         if not rows:
-            await callback.message.reply("مرخصی فعالی در گروه شما ثبت نشده است.")
+            await callback.message.reply("مرخصی فعالی در منطقه شما ثبت نشده است.")
         else:
             lines = [
                 f"• {jalali.format_jalali(r['leave_date'])} — {display_name(r)} "
-                f"({STATUS_FA.get(r['status'], r['status'])})"
+                f"— {r.get('group_name') or '-'} — {STATUS_FA.get(r['status'], r['status'])}"
                 for r in rows
             ]
-            await callback.message.reply("مرخصی‌های فعال گروه شما:\n" + "\n".join(lines))
+            await callback.message.reply("مرخصی‌های فعال منطقه شما:\n" + "\n".join(lines))
     await send_fresh_calendar(callback.message, db_user, y, m)
 
 
@@ -2467,8 +2495,8 @@ async def apply_leave_decision(decider_id: int, leave_id: int, new_status: str, 
     if status == "full":
         names = "، ".join(display_name(o) for o in extra) if extra else "-"
         return (
-            f"❌ ظرفیت گروه برای {jalali.format_jalali(leave['leave_date'])} "
-            f"توسط {names} پر است."
+            f"❌ ظرفیت مرخصی برای {jalali.format_jalali(leave['leave_date'])} "
+            f"پر است. دارندگان: {names}"
         )
 
     requester = await run_db(db.get_user, leave["user_id"])
@@ -3264,38 +3292,210 @@ async def cb_shift_own_settings_slot(callback: CallbackQuery, data: str):
 
 
 async def cb_dayinfo(callback: CallbackQuery, data: str):
-    """نمایش نام افراد دارای مرخصی در یک روز."""
+    """نمایش مرخصی‌های روز در منطقه + اکشن‌های ارشد + ثبت سریع برای خود."""
     date_str = data.split(":", 1)[1]
     viewer = await run_db(db.get_user, callback.user.id)
     if not viewer:
         return
+
     region_id = None
-    if not viewer.get("is_admin"):
-        if viewer.get("is_shift_lead"):
-            # همه مناطق تحت مدیریت — بدون فیلتر سخت؛ یا region خود
-            region_id = None
-            # محدود به مناطق تحت مدیریت در کوئری بعدی
-        else:
-            region_id = viewer.get("region_id")
+    if viewer.get("is_admin"):
+        region_id = None  # همه
+    elif viewer.get("is_shift_lead"):
+        region_id = None  # فیلتر بعدی
+    else:
+        region_id = viewer.get("region_id")
+
     rows = await run_db(db.leaves_on_date_for_viewer, date_str, region_id)
+
     if viewer.get("is_shift_lead") and not viewer.get("is_admin"):
-        allowed = set(await run_db(db.list_shift_lead_region_ids, viewer["user_id"]))
+        allowed = set(await run_db(db.list_shift_lead_region_ids, viewer["user_id"]) or [])
         filtered = []
         for r in rows:
             u = await run_db(db.get_user, r["user_id"])
             if u and u.get("region_id") in allowed:
                 filtered.append(r)
         rows = filtered
+    elif not viewer.get("is_admin") and region_id is not None:
+        # همه اعضا فقط منطقه خودشان (قبلاً در کوئری فیلتر شده)
+        pass
+
+    date_fa = jalali.format_jalali(date_str)
     if not rows:
-        await callback.message.reply(f"در {jalali.format_jalali(date_str)} مرخصی فعالی نیست.")
-        return
-    lines = [
-        f"• {display_name(r)} — {r.get('group_name') or '-'} — {STATUS_FA.get(r['status'], r['status'])}"
-        for r in rows
-    ]
-    await callback.message.reply(
-        f"📋 مرخصی‌های {jalali.format_jalali(date_str)}:\n" + "\n".join(lines)
+        text = f"در {date_fa} مرخصی فعالی در محدودهٔ دید شما نیست."
+    else:
+        lines = [
+            f"• {display_name(r)} — {r.get('group_name') or '-'} — {STATUS_FA.get(r['status'], r['status'])}"
+            for r in rows
+        ]
+        text = f"📋 مرخصی‌های {date_fa}:\n" + "\n".join(lines)
+
+    from bale import InlineKeyboardMarkup, InlineKeyboardButton
+    kb_i = InlineKeyboardMarkup()
+    row_i = 1
+
+    # ارشد: لغو/رد مرخصی تکنسین و اپراتور همان منطقه
+    is_snr = bool(viewer.get("is_senior") or viewer.get("role") == "snr")
+    if is_snr and viewer.get("region_id"):
+        for r in rows:
+            u = await run_db(db.get_user, r["user_id"])
+            if not u:
+                continue
+            if u.get("region_id") != viewer.get("region_id"):
+                continue
+            if u.get("is_shift_lead") or u.get("is_admin") or u.get("is_senior") or u.get("role") == "snr":
+                continue  # فقط تکنسین و اپراتور
+            if r.get("status") not in ("pending", "reviewing", "approved"):
+                continue
+            name = display_name(r) or str(r["user_id"])
+            kb_i.add(
+                InlineKeyboardButton(
+                    text=f"❌ لغو «{name[:16]}»",
+                    callback_data=f"snr_cancel:{r['id']}",
+                ),
+                row=row_i,
+            )
+            row_i += 1
+            if r.get("status") in ("pending", "reviewing"):
+                kb_i.add(
+                    InlineKeyboardButton(
+                        text=f"✅ تایید «{name[:16]}»",
+                        callback_data=f"decide:{r['id']}:approved",
+                    ),
+                    row=row_i,
+                )
+                row_i += 1
+
+    # ثبت مرخصی خود در همین روز (اگر هنوز ندارد)
+    own = next((r for r in rows if r.get("user_id") == viewer["user_id"]), None)
+    is_snr = bool(viewer.get("is_senior") or viewer.get("role") == "snr")
+    can_self = (
+        viewer.get("approved")
+        and not viewer.get("is_admin")
+        and date_str >= today_str()
+        and (viewer.get("group_id") or is_snr)
     )
+    if can_self and not own:
+        if is_snr and viewer.get("shift_index") is not None:
+            cap = await run_db(db.senior_leave_capacity_on_date, int(viewer["shift_index"]), date_str)
+            label = "ظرفیت ارشدهای هم‌شیفت"
+        elif viewer.get("group_id"):
+            cap = await run_db(db.group_capacity_on_date, viewer["group_id"], date_str)
+            label = "ظرفیت گروه شما"
+        else:
+            cap = {"max": 0, "used": 0, "remaining": 0}
+            label = "ظرفیت"
+        rem = cap.get("remaining", 0)
+        mx = cap.get("max", 0)
+        if mx == 0 and is_snr:
+            # نامحدود
+            kb_i.add(
+                InlineKeyboardButton(
+                    text="📝 ثبت مرخصی من",
+                    callback_data=f"quick_leave:{date_str}",
+                ),
+                row=row_i,
+            )
+            row_i += 1
+            text += f"\n\n{label}: بدون سقف"
+        elif rem > 0:
+            kb_i.add(
+                InlineKeyboardButton(
+                    text=f"📝 ثبت مرخصی من (باقی: {rem})",
+                    callback_data=f"quick_leave:{date_str}",
+                ),
+                row=row_i,
+            )
+            row_i += 1
+            text += f"\n\n{label}: {cap['used']}/{mx}"
+        else:
+            text += f"\n\n{label} پر است ({cap['used']}/{mx})."
+    elif own:
+        text += f"\n\nوضعیت مرخصی شما: {STATUS_FA.get(own.get('status'), own.get('status'))}"
+
+    if row_i == 1:
+        await callback.message.reply(text)
+    else:
+        await callback.message.reply(text, components=kb_i)
+
+
+async def cb_snr_cancel_leave(callback: CallbackQuery, data: str):
+    """ارشد: لغو مرخصی تکنسین/اپراتور همان منطقه."""
+    leave_id = int(data.split(":")[1])
+    viewer = await run_db(db.get_user, callback.user.id)
+    leave = await run_db(db.get_leave, leave_id)
+    if not viewer or not leave:
+        await _ui_reply(callback, "درخواست پیدا نشد.")
+        return
+    if not (viewer.get("is_senior") or viewer.get("role") == "snr"):
+        await _ui_reply(callback, "فقط تکنسین ارشد مجاز است.")
+        return
+    requester = await run_db(db.get_user, leave["user_id"])
+    if not requester or requester.get("region_id") != viewer.get("region_id"):
+        await _ui_reply(callback, "این مرخصی در منطقه شما نیست.")
+        return
+    if requester.get("is_senior") or requester.get("is_shift_lead") or requester.get("is_admin"):
+        await _ui_reply(callback, "لغو مرخصی این نقش در اختیار شما نیست.")
+        return
+    ok = await run_db(db.cancel_leave, leave_id)
+    if not ok:
+        await _ui_reply(callback, "لغو انجام نشد.")
+        return
+    try:
+        await client.send_message(
+            leave["user_id"],
+            f"❌ مرخصی {jalali.format_jalali(leave['leave_date'])} شما توسط تکنسین ارشد لغو شد.",
+        )
+    except Exception:
+        logger.exception("notify cancel")
+    await _ui_reply(
+        callback,
+        f"✅ مرخصی {display_name(requester)} در {jalali.format_jalali(leave['leave_date'])} لغو شد.",
+    )
+
+
+async def cb_quick_leave(callback: CallbackQuery, data: str):
+    """ثبت سریع مرخصی برای خود در یک روز از dayinfo."""
+    date_str = data.split(":", 1)[1]
+    uid = callback.user.id
+    viewer = await run_db(db.get_user, uid)
+    if not viewer:
+        return
+    if date_str < today_str():
+        await _ui_reply(callback, "برای روز گذشته نمی‌توان ثبت کرد.")
+        return
+    is_snr = bool(viewer.get("is_senior") or viewer.get("role") == "snr")
+    if is_snr and viewer.get("shift_index") is not None:
+        cap = await run_db(db.senior_leave_capacity_on_date, int(viewer["shift_index"]), date_str)
+        if cap.get("max", 0) > 0 and cap.get("remaining", 0) <= 0:
+            names = "، ".join(
+                f"{o.get('first_name') or ''} {o.get('last_name') or ''}".strip() or str(o["user_id"])
+                for o in (cap.get("owners") or [])
+            )
+            await _ui_reply(
+                callback,
+                f"ظرفیت مرخصی ارشدهای این شیفت پر است ({cap['used']}/{cap['max']}).\nدارندگان: {names or '-'}",
+            )
+            return
+    else:
+        if not viewer.get("group_id"):
+            await _ui_reply(callback, "گروه کاری شما مشخص نیست.")
+            return
+        cap = await run_db(db.group_capacity_on_date, viewer["group_id"], date_str)
+        if cap.get("remaining", 0) <= 0:
+            await _ui_reply(callback, f"ظرفیت گروه پر است ({cap['used']}/{cap['max']}).")
+            return
+    status, lid = await run_db(db.request_leave, uid, date_str, None, None)
+    if status != "created":
+        await _ui_reply(callback, "قبلاً برای این روز ثبت شده است.")
+        return
+    await notify_admin_new_leave_request(viewer, date_str, lid)
+    await _ui_reply(
+        callback,
+        f"📝 درخواست مرخصی {jalali.format_jalali(date_str)} ثبت شد "
+        f"(ظرفیت گروه پس از تایید: {cap['used']}/{cap['max']}).",
+    )
+
 
 
 async def cb_batch_decide(callback: CallbackQuery, data: str):
