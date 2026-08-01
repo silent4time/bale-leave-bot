@@ -887,6 +887,30 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
 # ==========================================================================
 
 
+
+async def open_over_cap_calendar(message: Message, author, db_user: dict):
+    """تقویم انتخاب؛ روزهای پر = مازاد، بقیه = عادی."""
+    if not db_user:
+        await message.reply("کاربر پیدا نشد.")
+        return
+    try:
+        y, m = jalali.today_jalali()[:2]
+    except Exception:
+        ty, tm, td = jalali.gregorian_to_jalali(__import__("datetime").date.today())
+        y, m = ty, tm
+    sel = states.get_selection(author.id, int(y), int(m))
+    sel["over_mode"] = True
+    states.set_state(author.id, action="cal_over_mode", year=int(y), month=int(m))
+    await message.reply(
+        "📅 تقویم مرخصی (حالت هوشمند)\n"
+        "روزها را انتخاب و سپس «ثبت» را بزنید.\n"
+        "• بدون تداخل ظرفیت → درخواست عادی\n"
+        "• ظرفیت تکمیل → درخواست اضافه بر ظرفیت برای مافوق"
+    )
+    await show_calendar(message, db_user, interactive=True)
+
+
+
 async def show_region_leaves_status(message: Message, db_user: dict):
     """وضعیت مرخصی فعال بر اساس نقش:
     - مسئول شیفت: مناطق تحت مدیریت
@@ -960,11 +984,8 @@ async def handle_admin_menu(message: Message, author, text: str):
         return
 
     if text == getattr(kb, "BTN_OVER_CAP_LEAVE", "➕ درخواست مرخصی اضافه بر ظرفیت"):
-        states.set_state(author.id, action="over_cap_date")
-        await message.reply(
-            "تاریخ مرخصی اضافه بر ظرفیت را وارد کنید.\n"
-            "نمونه: 1404-05-12 یا 12-5-1404"
-        )
+        _u = await run_db(db.get_user, author.id)
+        await open_over_cap_calendar(message, author, _u)
         return
 
     if text == kb.ADMIN_BTN_PENDING:
@@ -1095,11 +1116,8 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
         return
 
     if text == getattr(kb, "BTN_OVER_CAP_LEAVE", "➕ درخواست مرخصی اضافه بر ظرفیت"):
-        states.set_state(author.id, action="over_cap_date")
-        await message.reply(
-            "تاریخ مرخصی اضافه بر ظرفیت را وارد کنید.\n"
-            "نمونه: 1404-05-12 یا 12-5-1404"
-        )
+        _u = await run_db(db.get_user, author.id)
+        await open_over_cap_calendar(message, author, _u)
         return
 
     if text == kb.LEAD_BTN_QUEUE:
@@ -1266,11 +1284,8 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
         return
 
     if text == getattr(kb, "BTN_OVER_CAP_LEAVE", "➕ درخواست مرخصی اضافه بر ظرفیت"):
-        states.set_state(author.id, action="over_cap_date")
-        await message.reply(
-            "تاریخ مرخصی اضافه بر ظرفیت را وارد کنید.\n"
-            "نمونه: 1404-05-12 یا 12-5-1404"
-        )
+        _u = await run_db(db.get_user, author.id)
+        await open_over_cap_calendar(message, author, _u)
         return
 
     region_id = db_user.get("region_id")
@@ -1597,11 +1612,8 @@ async def handle_user_menu(message: Message, author, db_user: dict, text: str):
         await show_region_leaves_status(message, db_user)
         return
     if text == getattr(kb, "BTN_OVER_CAP_LEAVE", "➕ درخواست مرخصی اضافه بر ظرفیت"):
-        states.set_state(author.id, action="over_cap_date")
-        await message.reply(
-            "تاریخ مرخصی اضافه بر ظرفیت را وارد کنید.\n"
-            "نمونه: 1404-05-12 یا 12-5-1404"
-        )
+        _u = await run_db(db.get_user, author.id)
+        await open_over_cap_calendar(message, author, _u)
         return
     if text == kb.USER_BTN_CALENDAR:
         await show_calendar(message, db_user)
@@ -2571,17 +2583,39 @@ async def finalize_leave_submit(uid: int, y: int, m: int, dates: list, note: str
     db_user = await run_db(db.get_user, uid)
     if not db_user:
         return "کاربر پیدا نشد."
-    submitted = []
-    blocked = []  # (date_str, owners)
+    sel = states.get_selection(uid, y, m)
+    over_mode = bool(sel.get("over_mode"))
+    st = states.get_state(uid) or {}
+    if st.get("action") == "cal_over_mode":
+        over_mode = True
+
+    normal_submitted = []   # (date, lid)
+    over_submitted = []
+    blocked = []            # only when not over_mode
+
     batch_id = secrets.token_hex(8) if len(dates) > 1 else None
     for date_str in dates:
-        status, extra = await run_db(db.request_leave, uid, date_str, note, batch_id)
-        if status == "created":
-            submitted.append((date_str, extra))
-        elif status == "full":
-            blocked.append((date_str, extra or []))
-    sel = states.get_selection(uid, y, m)
+        # پیش‌چک ظرفیت برای تصمیم نوع درخواست
+        status_chk, owners = await run_db(db.request_leave, uid, date_str, note, batch_id)
+        if status_chk == "created":
+            normal_submitted.append((date_str, owners))
+            continue
+        if status_chk == "exists":
+            continue
+        if status_chk == "full":
+            if over_mode:
+                st2, lid2 = await run_db(db.request_over_capacity_leave, uid, date_str, note or "اضافه بر ظرفیت")
+                if st2 == "created":
+                    over_submitted.append((date_str, lid2, owners or []))
+                elif st2 == "exists":
+                    pass
+                else:
+                    blocked.append((date_str, owners or []))
+            else:
+                blocked.append((date_str, owners or []))
+
     sel["to_submit"].clear()
+    sel["over_mode"] = False
     states.clear_state(uid)
 
     parts = []
@@ -2591,17 +2625,24 @@ async def finalize_leave_submit(uid: int, y: int, m: int, dates: list, note: str
             parts.append(
                 f"❌ {jalali.format_jalali(date_str)}: ظرفیت تکمیل است. "
                 f"دارنده(های) مرخصی: {names}\n"
-                "درخواستی ثبت نشد و برای مسئول ارسال نشد."
+                "درخواستی ثبت نشد. برای ثبت مازاد از دکمه «مرخصی اضافه بر ظرفیت» استفاده کنید."
             )
-    if submitted:
-        dates_txt = "، ".join(jalali.format_jalali(d) for d, _ in submitted)
-        if len(submitted) > 1:
-            await notify_leave_batch(db_user, submitted)
+    if normal_submitted:
+        dates_txt = "، ".join(jalali.format_jalali(d) for d, _ in normal_submitted)
+        if len(normal_submitted) > 1:
+            await notify_leave_batch(db_user, normal_submitted)
         else:
-            for date_str, lid in submitted:
+            for date_str, lid in normal_submitted:
                 await notify_admin_new_leave_request(db_user, date_str, lid)
         parts.append(
-            f"📝 درخواست مرخصیِ روز(های) {dates_txt} ثبت شد و برای بررسی ارسال شد."
+            f"📝 درخواست عادی برای روز(های) {dates_txt} ثبت و برای بررسی ارسال شد."
+        )
+    if over_submitted:
+        for date_str, lid, owners in over_submitted:
+            await notify_over_capacity_leave(db_user, date_str, lid)
+        dates_txt = "، ".join(jalali.format_jalali(d) for d, _, __ in over_submitted)
+        parts.append(
+            f"⚠️ درخواست اضافه بر ظرفیت برای روز(های) {dates_txt} ثبت و برای مافوق ارسال شد."
         )
     if not parts:
         return "روزی برای ثبت انتخاب نشده بود یا از قبل ثبت شده است."
