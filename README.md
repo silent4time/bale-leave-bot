@@ -35,30 +35,19 @@
 
 ## نصب در ۳ دقیقه
 
-### ۱) کلون کردن پروژه
+### ۱) کلون و نصب
 
 ```bash
 sudo mkdir -p /home/bale_leave_bot
 sudo chown "$USER":"$USER" /home/bale_leave_bot
 git clone https://github.com/silent4time/bale-leave-bot.git /home/bale_leave_bot
-```
-
-### ۲) ورود به پوشهٔ پروژه (الزامی)
-
-قبل از هر دستور نصب یا مدیریت، **حتماً** وارد پوشه شوید:
-
-```bash
-cd /home/bale_leave_bot
-```
-
-بدون این مرحله اسکریپت فایل‌ها را پیدا نمی‌کند.
-
-### ۳) اجرای منوی مدیریت
-
-```bash
 cd /home/bale_leave_bot
 bash manage.sh
 ```
+
+> همیشه اول `cd /home/bale_leave_bot` سپس `bash manage.sh`.
+
+در منو گزینهٔ **۱) Install** را بزنید. بعد از نصب، سرویس به‌صورت خودکار اجرا می‌شود.
 
 منوی زیر ظاهر می‌شود:
 
@@ -70,7 +59,7 @@ bash manage.sh
   0) Exit
 ```
 
-### ۴) گزینهٔ ۱ را بزنید (Install)
+### ۲) در منو گزینهٔ ۱ (Install) را بزنید
 
 اسکریپت به‌ترتیب:
 

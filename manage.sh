@@ -298,12 +298,10 @@ do_install() {
   # systemd (optional)
   step_banner 5 5 "Service / finish"
   if have_cmd systemctl; then
-    echo ""
-    read -rp "Create systemd service for 24/7 auto-restart? (y/n) " ANS
-    if [[ "$ANS" == "y" || "$ANS" == "Y" ]]; then
-      local PY
-      PY="$(python_bin "$target")"
-      sudo bash -c "cat > $SERVICE_FILE" <<SERVICEEOF
+    local PY
+    PY="$(python_bin "$target")"
+    info "Creating systemd service (auto-start)..."
+    sudo bash -c "cat > $SERVICE_FILE" <<SERVICEEOF
 [Unit]
 Description=Bale Leave Management Bot
 After=network.target
@@ -320,25 +318,27 @@ User=$(whoami)
 [Install]
 WantedBy=multi-user.target
 SERVICEEOF
-      sudo systemctl daemon-reload
-      sudo systemctl enable "$SERVICE_NAME"
-      sudo systemctl restart "$SERVICE_NAME"
-      ok "Service created and started."
-      echo "  Status: sudo systemctl status $SERVICE_NAME"
-      echo "  Logs:   sudo journalctl -u $SERVICE_NAME -f"
-      echo "  Stop:   sudo systemctl stop $SERVICE_NAME"
-      return 0
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$SERVICE_NAME"
+    sudo systemctl restart "$SERVICE_NAME"
+    sleep 1
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+      ok "Bot service is running"
+    else
+      warn "Service start unclear — check: sudo journalctl -u $SERVICE_NAME -n 30"
     fi
+    echo "  Status:  sudo systemctl status $SERVICE_NAME"
+    echo "  Logs:    sudo journalctl -u $SERVICE_NAME -f"
+    echo "  Restart: bash manage.sh  →  option 3"
+  else
+    echo ""
+    ok "Install finished (no systemd)."
+    echo "Run manually:"
+    echo "  cd $target && source venv/bin/activate && python3 bot.py"
   fi
 
   echo ""
-  ok "Install finished."
-  echo "To run manually:"
-  if [ -d "venv" ]; then
-    echo "  cd $target && source venv/bin/activate && python3 bot.py"
-  else
-    echo "  cd $target && python3 bot.py"
-  fi
+  ok "Install complete. Returning to menu..."
 }
 
 # ---------------------------------------------------------------------------
@@ -593,6 +593,42 @@ do_edit_config() {
 # ---------------------------------------------------------------------------
 # Menu
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Restart service
+# ---------------------------------------------------------------------------
+do_restart() {
+  echo ""
+  echo "============================================"
+  echo "  Restart"
+  echo "============================================"
+  local target
+  target="$(find_install_dir)"
+  if [ -z "$target" ]; then
+    err "Bot is not installed yet."
+    return 1
+  fi
+  if [ -f "$SERVICE_FILE" ] && have_cmd systemctl; then
+    info "Restarting systemd service..."
+    sudo systemctl restart "$SERVICE_NAME" || {
+      err "systemctl restart failed"
+      return 1
+    }
+    sleep 1
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+      ok "Service is running"
+      systemctl status "$SERVICE_NAME" --no-pager -l | head -n 12 || true
+    else
+      warn "Service may not be active. Check logs:"
+      echo "  sudo journalctl -u $SERVICE_NAME -n 40 --no-pager"
+    fi
+  else
+    warn "No systemd service found."
+    echo "  Start manually:"
+    echo "    cd $target && source venv/bin/activate && python3 bot.py"
+  fi
+}
+
 show_banner() {
   clear 2>/dev/null || true
   local ver="?"
@@ -629,16 +665,18 @@ main_menu() {
     show_banner
     echo "  1) Install"
     echo "  2) Update"
-    echo "  3) Uninstall"
-    echo "  4) Edit settings (token / DB path)"
+    echo "  3) Restart bot"
+    echo "  4) Uninstall"
+    echo "  5) Edit settings (token / DB path)"
     echo "  0) Exit"
     echo ""
-    read -rp "  Select [0-4]: " CHOICE
+    read -rp "  Select [0-5]: " CHOICE
     case "$CHOICE" in
       1) do_install; pause ;;
       2) do_update; pause ;;
-      3) do_uninstall; pause ;;
-      4) do_edit_config; pause ;;
+      3) do_restart; pause ;;
+      4) do_uninstall; pause ;;
+      5) do_edit_config; pause ;;
       0|q|Q) echo "Bye."; exit 0 ;;
       *) warn "Invalid choice."; sleep 1 ;;
     esac

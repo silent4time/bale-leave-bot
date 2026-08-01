@@ -1430,18 +1430,16 @@ async def render_calendar_edit(callback: CallbackQuery, db_user: dict, year: int
 #  کال‌بک‌های اینلاین
 # ==========================================================================
 
-@client.event
-
 # === shift/settings handlers ===
 async def _term_region() -> str:
     try:
-        return await _term_region()
+        return await run_db(db.get_term_region)
     except Exception:
         return "منطقه کاری"
 
 async def _term_group() -> str:
     try:
-        return await _term_group()
+        return await run_db(db.get_term_group)
     except Exception:
         return "گروه کاری"
 
@@ -1725,9 +1723,7 @@ async def cb_shreg_info(callback: CallbackQuery, data: str):
     await _ui_reply(callback, text)
 
 
-
-
-
+@client.event
 async def on_callback(callback: CallbackQuery):
     data = callback.data or ""
     if data == "noop":
