@@ -860,13 +860,24 @@ async def handle_admin_menu(message: Message, author, text: str):
         if not rows:
             await message.reply("مرخصی فعالی (از امروز به بعد) ثبت نشده است.")
             return
-        lines = [
-            f"• {jalali.format_jalali(r['leave_date'])} — {display_name(r)} "
-            f"({r.get('region_name') or '-'} / {r.get('group_name') or '-'}) "
-            f"— {STATUS_FA.get(r['status'], r['status'])} — {jalali.format_datetime_display(r['requested_at'])}"
-            for r in rows
-        ]
-        await message.reply("گزارش مرخصی‌های فعال:\n" + "\n".join(lines))
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+        table = format_leaves_table(rows, letters=letters)
+        text_out = "📊 گزارش مرخصی‌های فعال\n\n" + table
+        if len(text_out) <= 3500:
+            await message.reply(text_out)
+        else:
+            lines = table.split("\n")
+            buf = "📊 گزارش مرخصی‌های فعال\n\n"
+            for line in lines:
+                if len(buf) + len(line) + 1 > 3500:
+                    await message.reply(buf)
+                    buf = line + "\n"
+                else:
+                    buf += line + "\n"
+            if buf.strip():
+                await message.reply(buf)
         return
 
     if text == kb.ADMIN_BTN_SETTINGS:
@@ -979,18 +990,28 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
 
     if text == kb.LEAD_BTN_REPORT:
         rows = await run_db(db.list_all_future_leaves, today_str())
-        rows = [r for r in rows if r.get("region_id") in region_ids or (
-            (await run_db(db.get_user, r["user_id"]) or {}).get("region_id") in region_ids
-        )]
-        if not rows:
+        filtered = []
+        for r in rows:
+            uid = r.get("user_id")
+            u = await run_db(db.get_user, uid) if uid else None
+            rid = r.get("region_id") or (u.get("region_id") if u else None)
+            if rid in region_ids:
+                # اگر region_name خالی بود از user پر کن
+                if not r.get("region_name") and u:
+                    reg = await run_db(db.get_region, rid)
+                    r = dict(r)
+                    r["region_name"] = reg["name"] if reg else "-"
+                    if r.get("shift_index") is None and u.get("shift_index") is not None:
+                        r["shift_index"] = u["shift_index"]
+                filtered.append(r)
+        if not filtered:
             await message.reply("مرخصی فعالی در مناطق شما نیست.")
             return
-        lines = [
-            f"• {jalali.format_jalali(r['leave_date'])} — {display_name(r)} "
-            f"({r.get('group_name') or '-'}) — {STATUS_FA.get(r['status'], r['status'])}"
-            for r in rows
-        ]
-        await message.reply("گزارش مناطق شما:\n" + "\n".join(lines))
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+        table = format_leaves_table(filtered, letters=letters)
+        await message.reply("📊 گزارش مناطق شما\n\n" + table)
         return
 
     if text == kb.LEAD_BTN_MY_SHIFT:
@@ -1118,6 +1139,34 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
         return
 
     await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=kb.senior_menu())
+
+
+
+def format_leaves_table(rows: list, *, letters: list = None) -> str:
+    """جدول متنی گزارش مرخصی.
+    ستون‌ها: ردیف | نام | شیفت | منطقه | گروه | روز مرخصی
+    """
+    letters = letters or []
+    header = "ردیف | نام و نام‌خانوادگی | شیفت | منطقه | گروه | روز مرخصی"
+    sep = "─" * min(48, max(24, len(header)))
+    lines = [header, sep]
+    for i, r in enumerate(rows, 1):
+        name = display_name(r) or "-"
+        si = r.get("shift_index")
+        if si is not None and letters and 0 <= int(si) < len(letters):
+            shift_txt = letters[int(si)]
+        elif si is not None:
+            shift_txt = str(si)
+        else:
+            shift_txt = "-"
+        region = r.get("region_name") or "-"
+        group = r.get("group_name") or "-"
+        try:
+            day = jalali.format_jalali_day_month(r["leave_date"])
+        except Exception:
+            day = r.get("leave_date") or "-"
+        lines.append(f"{i} | {name} | {shift_txt} | {region} | {group} | {day}")
+    return "\n".join(lines)
 
 
 async def show_all_users(message: Message):

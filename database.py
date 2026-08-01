@@ -1452,14 +1452,14 @@ def list_all_future_leaves(from_date_str: str, limit: int = 200):
     with _conn() as con:
         rows = con.execute(
             """
-            SELECT l.*, u.first_name, u.last_name, g.name AS group_name,
-                   r.name AS region_name
+            SELECT l.*, u.first_name, u.last_name, u.shift_index,
+                   g.name AS group_name, r.name AS region_name
             FROM leaves l
             JOIN users u ON u.user_id = l.user_id
             LEFT JOIN groups g ON g.id = u.group_id
             LEFT JOIN regions r ON r.id = u.region_id
             WHERE l.leave_date >= ? AND l.status IN ('pending','reviewing','approved')
-            ORDER BY l.requested_at
+            ORDER BY l.leave_date, u.first_name
             LIMIT ?
             """,
             (from_date_str, limit),

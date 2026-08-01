@@ -115,7 +115,14 @@ def jalali_weekday(jy: int, jm: int, jd: int) -> int:
     return (g.weekday() + 2) % 7
 
 
+def format_jalali_day_month(date_str: str) -> str:
+    """مثلاً: ۳ مرداد"""
+    jy, jm, jd = (int(x) for x in date_str.split("-"))
+    return f"{jd} {PERSIAN_MONTHS[jm - 1]}"
+
+
 def format_jalali(date_str: str) -> str:
+
     """ورودی 'YYYY-MM-DD' شمسی -> خروجی 'DD ماه YYYY'"""
     jy, jm, jd = (int(x) for x in date_str.split("-"))
     return f"{jd} {PERSIAN_MONTHS[jm - 1]} {jy}"
