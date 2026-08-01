@@ -838,7 +838,79 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
 #  منوی مدیر
 # ==========================================================================
 
+
+async def show_region_leaves_status(message: Message, db_user: dict):
+    """وضعیت مرخصی فعال بر اساس نقش:
+    - مسئول شیفت: مناطق تحت مدیریت
+    - ارشد / تکنسین / اپراتور: منطقه خود
+    - مدیر (بدون نقش مسئول شیفت): همه مناطق
+    """
+    from_date = today_str()
+    rows = []
+    title = "📋 وضعیت مرخصی منطقه"
+
+    if db_user.get("is_shift_lead"):
+        region_ids = await run_db(db.list_shift_lead_region_ids, db_user["user_id"]) or []
+        collected = []
+        for rid in region_ids:
+            part = await run_db(db.list_region_active_leaves, rid, from_date) or []
+            collected.extend(part)
+        seen = set()
+        for r in collected:
+            lid = r.get("id")
+            if lid in seen:
+                continue
+            seen.add(lid)
+            rows.append(r)
+        title = "📋 وضعیت مرخصی مناطق تحت مدیریت شما"
+    elif db_user.get("is_admin"):
+        rows = await run_db(db.list_all_future_leaves, from_date) or []
+        title = "📋 وضعیت مرخصی همه مناطق"
+    else:
+        rid = db_user.get("region_id")
+        if not rid:
+            await message.reply("منطقه کاری شما مشخص نیست.")
+            return
+        rows = await run_db(db.list_region_active_leaves, rid, from_date) or []
+        reg = await run_db(db.get_region, rid)
+        rname = reg["name"] if reg else str(rid)
+        title = f"📋 وضعیت مرخصی منطقه «{rname}»"
+
+    if not rows:
+        await message.reply(f"{title}\n\nمرخصی فعالی ثبت نشده است.")
+        return
+
+    lines = []
+    for i, r in enumerate(rows, 1):
+        name = display_name(r)
+        day = jalali.format_jalali(r["leave_date"])
+        st = STATUS_FA.get(r.get("status"), r.get("status") or "-")
+        g = r.get("group_name") or "-"
+        rn = r.get("region_name") or "-"
+        lines.append(f"{i}. {name} | {day} | {g} | {rn} | {st}")
+
+    text = title + "\n\n" + "\n".join(lines)
+    if len(text) <= 3500:
+        await message.reply(text)
+        return
+    buf = title + "\n\n"
+    for line in lines:
+        if len(buf) + len(line) + 1 > 3500:
+            await message.reply(buf)
+            buf = line + "\n"
+        else:
+            buf += line + "\n"
+    if buf.strip():
+        await message.reply(buf)
+
+
+
 async def handle_admin_menu(message: Message, author, text: str):
+    if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
+        db_user = await run_db(db.get_user, author.id)
+        await show_region_leaves_status(message, db_user)
+        return
+
     if text == kb.ADMIN_BTN_PENDING:
         pending = await run_db(db.list_pending_users)
         if not pending:
@@ -961,6 +1033,10 @@ async def send_leaves_report_pdf(message: Message, rows: list, *, title: str, le
 
 async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: str):
     region_ids = await run_db(db.list_shift_lead_region_ids, author.id)
+
+    if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
+        await show_region_leaves_status(message, db_user)
+        return
 
     if text == kb.LEAD_BTN_QUEUE:
         any_row = False
@@ -1121,6 +1197,10 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
 # ==========================================================================
 
 async def handle_senior_menu(message: Message, author, db_user: dict, text: str):
+    if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
+        await show_region_leaves_status(message, db_user)
+        return
+
     region_id = db_user.get("region_id")
 
     if text == kb.SNR_BTN_QUEUE:
@@ -1421,6 +1501,9 @@ async def notify_admins_leave_cancelled(db_user: dict, dates):
 # ==========================================================================
 
 async def handle_user_menu(message: Message, author, db_user: dict, text: str):
+    if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
+        await show_region_leaves_status(message, db_user)
+        return
     if text == kb.USER_BTN_CALENDAR:
         await show_calendar(message, db_user)
         return

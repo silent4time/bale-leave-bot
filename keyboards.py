@@ -21,6 +21,7 @@ import config
 # --- مشترک بین مدیر/مسئول شیفت/ارشد ---
 BTN_ADD_PEOPLE = "➕ اضافه کردن افراد"
 BTN_ADD_CONTACT = BTN_ADD_PEOPLE  # سازگاری
+BTN_REGION_LEAVES = "📋 وضعیت مرخصی منطقه من"
 
 # --- مدیر ---
 # صف مرخصی در نقش «فقط مدیر» نیست.
@@ -39,7 +40,7 @@ ADMIN_BTN_REPLACE_ADMIN = "🔁 جایگزینی مدیر"
 ADMIN_MENU_TEXTS = {
     ADMIN_BTN_PENDING, ADMIN_BTN_REGIONS, ADMIN_BTN_GROUPS,
     ADMIN_BTN_MEMBERS, ADMIN_BTN_CALENDAR, ADMIN_BTN_REPORT,
-    ADMIN_BTN_SHIFT_LEADS, ADMIN_BTN_SETTINGS, ADMIN_BTN_REPLACE_ADMIN, BTN_ADD_PEOPLE,
+    ADMIN_BTN_SHIFT_LEADS, ADMIN_BTN_SETTINGS, ADMIN_BTN_REPLACE_ADMIN, BTN_ADD_PEOPLE, BTN_REGION_LEAVES,
 }
 
 # --- مسئول شیفت ---
@@ -55,7 +56,7 @@ LEAD_BTN_SETTINGS = "⚙️ تنظیمات مناطق من"
 
 LEAD_MENU_TEXTS = {
     LEAD_BTN_QUEUE, LEAD_BTN_GROUPS, LEAD_BTN_MEMBERS, LEAD_BTN_PENDING, LEAD_BTN_CALENDAR,
-    LEAD_BTN_REPORT, LEAD_BTN_MY_SHIFT, LEAD_BTN_TRANSFER, LEAD_BTN_SETTINGS, BTN_ADD_PEOPLE,
+    LEAD_BTN_REPORT, LEAD_BTN_MY_SHIFT, LEAD_BTN_TRANSFER, LEAD_BTN_SETTINGS, BTN_ADD_PEOPLE, BTN_REGION_LEAVES,
 }
 
 # --- تکنسین ارشد ---
@@ -68,7 +69,7 @@ SNR_BTN_STATUS = "ℹ️ وضعیت من"
 
 SNR_MENU_TEXTS = {
     SNR_BTN_QUEUE, SNR_BTN_MEMBERS, SNR_BTN_PENDING, SNR_BTN_GROUPS, SNR_BTN_CALENDAR, SNR_BTN_STATUS,
-    BTN_ADD_PEOPLE,
+    BTN_ADD_PEOPLE, BTN_REGION_LEAVES,
 }
 
 
@@ -76,7 +77,7 @@ SNR_MENU_TEXTS = {
 USER_BTN_CALENDAR = "📅 تقویم مرخصی"
 USER_BTN_STATUS = "ℹ️ وضعیت من"
 
-USER_MENU_TEXTS = {USER_BTN_CALENDAR, USER_BTN_STATUS}
+USER_MENU_TEXTS = {USER_BTN_CALENDAR, USER_BTN_STATUS, BTN_REGION_LEAVES}
 
 ALL_MENU_TEXTS = ADMIN_MENU_TEXTS | LEAD_MENU_TEXTS | SNR_MENU_TEXTS | USER_MENU_TEXTS
 
@@ -113,6 +114,7 @@ def admin_menu(also_shift_lead: bool = False) -> MenuKeyboardMarkup:
         ADMIN_BTN_PENDING,
         ADMIN_BTN_MEMBERS,
         BTN_ADD_PEOPLE,
+        BTN_REGION_LEAVES,
         ADMIN_BTN_CALENDAR,
         ADMIN_BTN_REPORT,
         ADMIN_BTN_SETTINGS,
@@ -132,6 +134,7 @@ def shift_lead_menu() -> MenuKeyboardMarkup:
         LEAD_BTN_MEMBERS,
         LEAD_BTN_PENDING,
         BTN_ADD_PEOPLE,
+        BTN_REGION_LEAVES,
         LEAD_BTN_CALENDAR,
         LEAD_BTN_REPORT,
         LEAD_BTN_MY_SHIFT,
@@ -149,6 +152,7 @@ def senior_menu() -> MenuKeyboardMarkup:
         SNR_BTN_MEMBERS,
         SNR_BTN_PENDING,
         BTN_ADD_PEOPLE,
+        BTN_REGION_LEAVES,
         SNR_BTN_GROUPS,
         SNR_BTN_CALENDAR,
         SNR_BTN_STATUS,
@@ -160,7 +164,7 @@ def senior_menu() -> MenuKeyboardMarkup:
 
 def user_menu() -> MenuKeyboardMarkup:
     kb = MenuKeyboardMarkup()
-    _add_menu_two_col(kb, [USER_BTN_CALENDAR, USER_BTN_STATUS])
+    _add_menu_two_col(kb, [USER_BTN_CALENDAR, BTN_REGION_LEAVES, USER_BTN_STATUS])
     return kb
 
 
