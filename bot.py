@@ -830,6 +830,54 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         await message.reply(result)
         return True
 
+
+    if action == "over_cap_date":
+        raw = text.strip().replace("/", "-").replace(".", "-")
+        # پشتیبانی از 1404-05-03 یا 3-5-1404
+        parts = [p for p in raw.replace(" ", "").split("-") if p]
+        date_str = None
+        try:
+            if len(parts) == 3:
+                a, b, c = parts
+                if len(a) == 4:  # y-m-d
+                    y, m, d = int(a), int(b), int(c)
+                elif len(c) == 4:  # d-m-y
+                    d, m, y = int(a), int(b), int(c)
+                else:
+                    raise ValueError("bad")
+                date_str = jalali.parse_date_str(y, m, d)
+        except Exception:
+            date_str = None
+        if not date_str:
+            await message.reply(
+                "تاریخ نامعتبر است. نمونه: 1404-05-12 یا 12-5-1404"
+            )
+            return True
+        if date_str < today_str():
+            await message.reply("تاریخ نمی‌تواند قبل از امروز باشد. دوباره وارد کنید:")
+            return True
+        status, extra = await run_db(db.request_over_capacity_leave, author.id, date_str, "اضافه بر ظرفیت")
+        states.clear_state(author.id)
+        db_user = await run_db(db.get_user, author.id)
+        if status == "exists":
+            await message.reply(
+                "برای این روز از قبل مرخصی فعال دارید.",
+                components=kb.menu_for_user(db_user),
+            )
+            return True
+        if status != "created":
+            await message.reply("ثبت انجام نشد.", components=kb.menu_for_user(db_user))
+            return True
+        lid = extra
+        # اطلاع به مافوق با برچسب اضافه بر ظرفیت
+        await notify_over_capacity_leave(db_user, date_str, lid)
+        await message.reply(
+            f"📝 درخواست مرخصی اضافه بر ظرفیت برای {jalali.format_jalali(date_str)} ثبت شد "
+            "و برای مافوق ارسال شد.",
+            components=kb.menu_for_user(db_user),
+        )
+        return True
+
     states.clear_state(author.id)
     return False
 
@@ -909,6 +957,14 @@ async def handle_admin_menu(message: Message, author, text: str):
     if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
         db_user = await run_db(db.get_user, author.id)
         await show_region_leaves_status(message, db_user)
+        return
+
+    if text == getattr(kb, "BTN_OVER_CAP_LEAVE", "➕ درخواست مرخصی اضافه بر ظرفیت"):
+        states.set_state(author.id, action="over_cap_date")
+        await message.reply(
+            "تاریخ مرخصی اضافه بر ظرفیت را وارد کنید.\n"
+            "نمونه: 1404-05-12 یا 12-5-1404"
+        )
         return
 
     if text == kb.ADMIN_BTN_PENDING:
@@ -1036,6 +1092,14 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
 
     if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
         await show_region_leaves_status(message, db_user)
+        return
+
+    if text == getattr(kb, "BTN_OVER_CAP_LEAVE", "➕ درخواست مرخصی اضافه بر ظرفیت"):
+        states.set_state(author.id, action="over_cap_date")
+        await message.reply(
+            "تاریخ مرخصی اضافه بر ظرفیت را وارد کنید.\n"
+            "نمونه: 1404-05-12 یا 12-5-1404"
+        )
         return
 
     if text == kb.LEAD_BTN_QUEUE:
@@ -1199,6 +1263,14 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
 async def handle_senior_menu(message: Message, author, db_user: dict, text: str):
     if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
         await show_region_leaves_status(message, db_user)
+        return
+
+    if text == getattr(kb, "BTN_OVER_CAP_LEAVE", "➕ درخواست مرخصی اضافه بر ظرفیت"):
+        states.set_state(author.id, action="over_cap_date")
+        await message.reply(
+            "تاریخ مرخصی اضافه بر ظرفیت را وارد کنید.\n"
+            "نمونه: 1404-05-12 یا 12-5-1404"
+        )
         return
 
     region_id = db_user.get("region_id")
@@ -1437,7 +1509,27 @@ async def _recipients_for_leave_request(requester: dict):
     return list(dict.fromkeys(recipients))
 
 
-async def notify_admin_new_leave_request(requester: dict, date_str: str, leave_id: int):
+async def notify_over_capacity_leave(requester: dict, date_str: str, leave_id: int):
+    """ارسال درخواست اضافه بر ظرفیت به مافوق با دکمه تایید/رد."""
+    text = (
+        f"⚠️ درخواست مرخصی اضافه بر ظرفیت\n"
+        f"از: {display_name(requester)}\n"
+        f"روز: {jalali.format_jalali(date_str)}\n"
+        f"این درخواست خارج از ظرفیت عادی گروه/شیفت است."
+    )
+    from bale import InlineKeyboardMarkup, InlineKeyboardButton
+    kb_i = InlineKeyboardMarkup()
+    kb_i.add(InlineKeyboardButton(text="✅ تایید", callback_data=f"decide:{leave_id}:approved"), row=1)
+    kb_i.add(InlineKeyboardButton(text="❌ رد", callback_data=f"decide:{leave_id}:rejected"), row=2)
+    for uid in await _recipients_for_leave_request(requester):
+        try:
+            await client.send_message(uid, text, components=kb_i)
+        except Exception:
+            logger.exception("notify over_cap to %s", uid)
+
+
+async def notify_admin_new_leave_request(
+requester: dict, date_str: str, leave_id: int):
     leave = await run_db(db.get_leave, leave_id)
     group = await run_db(db.get_group, requester["group_id"]) if requester.get("group_id") else None
     text = format_admin_leave_text(requester, leave, group["name"] if group else None)
@@ -1503,6 +1595,13 @@ async def notify_admins_leave_cancelled(db_user: dict, dates):
 async def handle_user_menu(message: Message, author, db_user: dict, text: str):
     if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
         await show_region_leaves_status(message, db_user)
+        return
+    if text == getattr(kb, "BTN_OVER_CAP_LEAVE", "➕ درخواست مرخصی اضافه بر ظرفیت"):
+        states.set_state(author.id, action="over_cap_date")
+        await message.reply(
+            "تاریخ مرخصی اضافه بر ظرفیت را وارد کنید.\n"
+            "نمونه: 1404-05-12 یا 12-5-1404"
+        )
         return
     if text == kb.USER_BTN_CALENDAR:
         await show_calendar(message, db_user)

@@ -231,6 +231,7 @@ def _migrate(con):
         ("note_user", "TEXT"),
         ("note_admin", "TEXT"),
         ("decided_by", "INTEGER"),
+        ("over_capacity", "INTEGER NOT NULL DEFAULT 0"),
     ]:
         if not _column_exists(con, "leaves", col):
             con.execute(f"ALTER TABLE leaves ADD COLUMN {col} {decl}")
@@ -1228,6 +1229,50 @@ def request_leave(user_id: int, date_str: str, note_user: str = None, batch_id: 
     return result
 
 
+
+def request_over_capacity_leave(user_id: int, date_str: str, note_user: str = None):
+    """درخواست مرخصی اضافه بر ظرفیت — بدون چک ظرفیت؛ فلگ over_capacity=1."""
+    u = get_user(user_id)
+    if not u:
+        return ("not_found", None)
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM leaves WHERE user_id = ? AND leave_date = ?",
+            (user_id, date_str),
+        ).fetchone()
+        now = now_iso()
+        note = note_user or "اضافه بر ظرفیت"
+        if row is None:
+            con.execute(
+                """
+                INSERT INTO leaves (user_id, leave_date, status, requested_at, note_user, over_capacity)
+                VALUES (?, ?, 'pending', ?, ?, 1)
+                """,
+                (user_id, date_str, now, note),
+            )
+            lid = con.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+            result = ("created", lid)
+        elif row["status"] in ACTIVE_STATUSES:
+            result = ("exists", row["id"])
+        else:
+            con.execute(
+                """
+                UPDATE leaves
+                SET status = 'pending', requested_at = ?, decided_at = NULL,
+                    note_user = ?, note_admin = NULL, decided_by = NULL,
+                    over_capacity = 1, batch_id = NULL
+                WHERE id = ?
+                """,
+                (now, note, row["id"]),
+            )
+            result = ("created", row["id"])
+    if u.get("region_id") is not None:
+        inv_region(u["region_id"])
+    inv_user(user_id)
+    return result
+
+
+
 def try_set_status(leave_id: int, new_status: str, decided_by: int = None,
                    note_admin: str = None):
     """
@@ -1243,7 +1288,11 @@ def try_set_status(leave_id: int, new_status: str, decided_by: int = None,
             con.execute("COMMIT")
             return "not_found", None
 
-        if new_status == "approved":
+        if new_status == "approved" and int((leave["over_capacity"] if "over_capacity" in leave.keys() else 0) or 0) == 1:
+            # مرخصی اضافه بر ظرفیت: بدون محدودیت ظرفیت تایید می‌شود
+            pass
+        elif new_status == "approved":
+
             user = con.execute(
                 """
                 SELECT group_id, region_id, shift_index, is_senior, role,
