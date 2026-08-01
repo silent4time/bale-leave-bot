@@ -91,10 +91,13 @@ def build_calendar(
             else:
                 cb = f"dayinfo:{date_str}"
         elif date_str in approved_others:
-            # مرخصی تاییدشده دیگران — قابل مشاهده
+            # مرخصی تاییدشده دیگران — نمایش می‌شود ولی در حالت تعاملی قابل انتخاب برای درخواست خود
             n = approved_others[date_str]
             label = f"●{base}" if n == 1 else f"●{n}{base}"
-            cb = f"dayinfo:{date_str}"
+            if interactive:
+                cb = f"pick:{year}:{month}:{day}"
+            else:
+                cb = f"dayinfo:{date_str}"
         else:
             label = base
             if interactive:

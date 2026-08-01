@@ -1651,26 +1651,26 @@ async def show_status(message: Message, db_user: dict):
 
 
 async def show_calendar(message: Message, db_user: dict, *, region_id: int = None, interactive: bool = None):
-    """
-    interactive=None → خودکار: عضو/ارشد تعاملی، مدیر/مسئول‌شیفت فقط نمایش مگر عضو هم باشند.
-    """
-    if interactive is None:
-        interactive = not (db_user.get("is_admin") or db_user.get("is_shift_lead")) or bool(
-            db_user.get("group_id")
-        ) and not db_user.get("is_admin")
-        # عضو و ارشد همیشه تعاملی؛ مدیر/مسئول شیفت در حالت مشاهده منطقه معمولاً غیرتعاملی
-        if db_user.get("is_senior") and not db_user.get("is_admin"):
-            interactive = True
-        if not db_user.get("is_admin") and not db_user.get("is_shift_lead"):
-            interactive = True
-            if not db_user.get("group_id"):
-                await message.reply("شما هنوز به هیچ گروهی اختصاص داده نشده‌اید.")
-                return
-
+    """نمایش تقویم. interactive=True اجباری برای ثبت."""
     y, m, _ = jalali.today_jalali()
+    if interactive is None:
+        st = states.get_state(db_user["user_id"]) or {}
+        sel = states.get_selection(db_user["user_id"], y, m)
+        over_mode = bool(sel.get("over_mode") or st.get("action") == "cal_over_mode")
+        if over_mode:
+            interactive = True
+        else:
+            interactive = bool(
+                db_user.get("group_id")
+                or db_user.get("is_senior")
+                or db_user.get("role") == "snr"
+            )
+            if db_user.get("is_admin") and not db_user.get("is_senior") and not db_user.get("is_shift_lead"):
+                interactive = False
     await send_fresh_calendar(
-        message, db_user, y, m, region_id=region_id, interactive=interactive
+        message, db_user, y, m, region_id=region_id, interactive=bool(interactive)
     )
+
 
 
 async def own_status_for_month(user_id: int, year: int, month: int) -> dict:
@@ -2533,13 +2533,20 @@ async def cb_nav(callback: CallbackQuery, data: str):
     db_user = await run_db(db.get_user, callback.user.id)
     if not db_user:
         return
-    interactive = bool(db_user.get("group_id")) and not (
-        db_user.get("is_admin") and not db_user.get("is_senior")
-    )
-    if db_user.get("is_senior") or (
-        db_user.get("approved") and not db_user.get("is_admin") and not db_user.get("is_shift_lead")
-    ):
-        interactive = bool(db_user.get("group_id"))
+    st = states.get_state(callback.user.id) or {}
+    sel = states.get_selection(callback.user.id, y, m)
+    over_mode = bool(sel.get("over_mode") or st.get("action") == "cal_over_mode")
+    if over_mode:
+        sel["over_mode"] = True
+        interactive = True
+    else:
+        interactive = bool(db_user.get("group_id") or db_user.get("is_senior") or db_user.get("role") == "snr")
+        if db_user.get("is_admin") and not db_user.get("is_senior") and not db_user.get("is_shift_lead"):
+            # مدیر خالص: تقویم نمایشی مگر over_mode
+            interactive = False
+        if db_user.get("is_shift_lead") and not over_mode:
+            # مسئول شیفت در حالت عادی می‌تواند برای خودش ثبت کند اگر گروه دارد
+            interactive = bool(db_user.get("group_id") or db_user.get("approved"))
     await render_calendar_edit(callback, db_user, y, m, interactive=interactive)
 
 
@@ -2551,13 +2558,32 @@ async def cb_pick(callback: CallbackQuery, data: str):
         return
     uid = callback.user.id
     db_user = await run_db(db.get_user, uid)
-    if not db_user or not db_user.get("group_id"):
+    if not db_user:
         return
+    st = states.get_state(uid) or {}
+    sel = states.get_selection(uid, y, m)
+    over_mode = bool(sel.get("over_mode") or st.get("action") == "cal_over_mode")
+    # ارشد بدون گروه، یا حالت مازاد: مجاز به انتخاب
+    can_pick = bool(
+        db_user.get("group_id")
+        or db_user.get("is_senior")
+        or db_user.get("role") == "snr"
+        or over_mode
+        or db_user.get("approved")
+    )
+    if not can_pick:
+        await callback.message.reply("برای ثبت مرخصی باید عضو یک گروه باشید.")
+        return
+    if over_mode:
+        sel["over_mode"] = True
     own_status = await own_status_for_month(uid, y, m)
     if date_str in own_status:
         states.toggle_cancel(uid, y, m, date_str)
     else:
         states.toggle_submit(uid, y, m, date_str)
+    # حفظ over_mode بعد از toggle
+    if over_mode:
+        states.get_selection(uid, y, m)["over_mode"] = True
     await render_calendar_edit(callback, db_user, y, m, interactive=True)
 
 
