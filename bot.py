@@ -881,10 +881,11 @@ async def handle_admin_menu(message: Message, author, text: str):
         return
 
     if text == kb.ADMIN_BTN_SETTINGS:
+        states.set_state(author.id, nav_stack=["settings"])
         mode = await run_db(db.get_calendar_mode)
         cfg = await run_db(db.get_shift_config) if mode == "shift" else None
         await message.reply(
-            "تنظیمات ربات (مناطق، گروه‌ها، مسئولان شیفت، جایگزینی مدیر و پیکربندی‌های دیگر همه اینجاست):",
+            "⚙️ تنظیمات ربات",
             components=kb.settings_keyboard(mode, is_admin=True, shift_count=cfg["shift_count"] if cfg else None),
         )
         return
@@ -1143,30 +1144,68 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
 
 
 def format_leaves_table(rows: list, *, letters: list = None) -> str:
-    """جدول متنی گزارش مرخصی.
-    ستون‌ها: ردیف | نام | شیفت | منطقه | گروه | روز مرخصی
-    """
+    """جدول خط‌کشی‌شده گزارش مرخصی (کادر + خطوط ستون)."""
     letters = letters or []
-    header = "ردیف | نام و نام‌خانوادگی | شیفت | منطقه | گروه | روز مرخصی"
-    sep = "─" * min(48, max(24, len(header)))
-    lines = [header, sep]
-    for i, r in enumerate(rows, 1):
-        name = display_name(r) or "-"
+
+    def _shift(r):
         si = r.get("shift_index")
         if si is not None and letters and 0 <= int(si) < len(letters):
-            shift_txt = letters[int(si)]
-        elif si is not None:
-            shift_txt = str(si)
-        else:
-            shift_txt = "-"
-        region = r.get("region_name") or "-"
-        group = r.get("group_name") or "-"
+            return str(letters[int(si)])
+        if si is not None:
+            return str(si)
+        return "-"
+
+    def _day(r):
         try:
-            day = jalali.format_jalali_day_month(r["leave_date"])
+            return jalali.format_jalali_day_month(r["leave_date"])
         except Exception:
-            day = r.get("leave_date") or "-"
-        lines.append(f"{i} | {name} | {shift_txt} | {region} | {group} | {day}")
-    return "\n".join(lines)
+            return str(r.get("leave_date") or "-")
+
+    # داده‌های خام هر ردیف
+    data = []
+    for i, r in enumerate(rows, 1):
+        data.append([
+            str(i),
+            display_name(r) or "-",
+            _shift(r),
+            r.get("region_name") or "-",
+            r.get("group_name") or "-",
+            _day(r),
+        ])
+
+    headers = ["ردیف", "نام و نام‌خانوادگی", "شیفت", "منطقه", "گروه", "روز مرخصی"]
+
+    # عرض هر ستون = max(طول هدر، طول سلول‌ها) با محدودیت
+    widths = []
+    for col in range(6):
+        w = len(headers[col])
+        for row in data:
+            w = max(w, len(row[col]))
+        # سقف برای خوانایی در موبایل
+        widths.append(min(max(w, 2), 18 if col == 1 else 12))
+
+    def _fit(text: str, w: int) -> str:
+        t = text if len(text) <= w else text[: max(1, w - 1)] + "…"
+        return t + " " * (w - len(t))
+
+    def _line(left: str, mid: str, right: str, fill: str = "─") -> str:
+        parts = [fill * (widths[i] + 2) for i in range(6)]
+        return left + mid.join(parts) + right
+
+    top = _line("┌", "┬", "┐")
+    mid = _line("├", "┼", "┤")
+    bot_line = _line("└", "┴", "┘")
+
+    def _row(cells: list) -> str:
+        cells_f = [_fit(cells[i], widths[i]) for i in range(6)]
+        return "│ " + " │ ".join(cells_f) + " │"
+
+    out = [top, _row(headers), mid]
+    for row in data:
+        out.append(_row(row))
+    out.append(bot_line)
+    return "\n".join(out)
+
 
 
 async def show_all_users(message: Message):
@@ -1519,7 +1558,8 @@ async def cb_settings_terms(callback: CallbackQuery):
         kb_i = InlineKeyboardMarkup()
         kb_i.add(InlineKeyboardButton(text=f"تغییر: {tr}", callback_data="settings_term_region"), row=1)
         kb_i.add(InlineKeyboardButton(text=f"تغییر: {tg}", callback_data="settings_term_group"), row=2)
-        await _ui_reply(callback, f"واژه‌های قابل تغییر:\n• منطقه: {tr}\n• گروه: {tg}", kb_i)
+        kb_i.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data="nav_back_admin"), row=3)
+        await _ui_reply(callback, f"🏷 واژه‌های قابل تغییر\n• منطقه: {tr}\n• گروه: {tg}", kb_i)
     except Exception:
         logger.exception("settings_terms failed")
         await _ui_reply(callback, "خطا در باز کردن واژه‌ها. اگر تازه آپدیت کردید، database.py را هم جایگزین کنید.")
@@ -1528,6 +1568,7 @@ async def cb_settings_terms(callback: CallbackQuery):
 
 async def cb_settings_shifts(callback: CallbackQuery):
     """لیست شیفت‌ها — تنها نقطهٔ ورود مدیریت هر شیفت."""
+    nav_push(callback.user.id, "settings")
     cfg = await run_db(db.get_shift_config)
     if not cfg:
         await _ui_reply(callback, "ابتدا چرخهٔ شیفت را با «پیکربندی کامل چرخه» بسازید.")
@@ -1553,6 +1594,7 @@ async def cb_settings_shifts(callback: CallbackQuery):
 
 async def cb_shift_mgmt(callback: CallbackQuery, data: str):
     """پنل یک شیفت: روز کاری + مسئولان + مناطق + آمار."""
+    nav_push(callback.user.id, "settings_shifts")
     try:
         idx = int(data.split(":")[1])
     except (IndexError, ValueError):
@@ -1951,6 +1993,7 @@ async def on_callback(callback: CallbackQuery):
             )
         
         elif data == "settings_terms":
+            nav_push(callback.user.id, "settings")
             await cb_settings_terms(callback)
         elif data == "settings_term_region":
             states.set_state(callback.user.id, action="set_term_region")
@@ -1980,14 +2023,17 @@ async def on_callback(callback: CallbackQuery):
             await cb_shreg_info(callback, data)
 
         elif data == "settings_regions":
+            nav_push(callback.user.id, "settings")
             regions = await run_db(db.list_regions)
-            await callback.message.reply("مناطق:", components=kb.regions_manage_keyboard(regions))
+            await _ui_reply(callback, "🗺 مناطق:", kb.regions_manage_keyboard(regions))
         elif data == "settings_shiftleads":
+            nav_push(callback.user.id, "settings")
             leads = await run_db(db.list_shift_leads)
             cap = await run_db(db.get_max_shift_leads)
-            await callback.message.reply(
-                f"مسئولان شیفت ({len(leads)} از سقف {cap}):",
-                components=kb.shift_leads_manage_keyboard(leads),
+            await _ui_reply(
+                callback,
+                f"👔 مسئولان شیفت ({len(leads)} از سقف {cap}):",
+                kb.shift_leads_manage_keyboard(leads),
             )
         elif data == "settings_replaceadmin":
             states.set_state(callback.user.id, action="replace_admin_uid")
@@ -2880,15 +2926,68 @@ async def cb_cfgshift_own(callback: CallbackQuery, data: str):
 
 
 async def cb_nav_main(callback: CallbackQuery):
+    """بازگشت به منوی اصلی نقش کاربر."""
     states.clear_state(callback.user.id)
     db_user = await run_db(db.get_user, callback.user.id)
-    await callback.message.reply("منوی اصلی:", components=kb.menu_for_user(db_user))
+    await _ui_reply(callback, "🏠 منوی اصلی", kb.menu_for_user(db_user))
+
+
+async def open_admin_settings(callback: CallbackQuery):
+    """نمایش منوی تنظیمات مدیر (یک سطح بالاتر از زیرمنوها)."""
+    mode = await run_db(db.get_calendar_mode)
+    cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+    sc = cfg["shift_count"] if cfg else None
+    await _ui_reply(
+        callback,
+        "⚙️ تنظیمات ربات",
+        kb.settings_keyboard(mode, is_admin=True, shift_count=sc),
+    )
 
 
 async def cb_nav_back_admin(callback: CallbackQuery):
+    """یک سطح عقب: از زیرمنوی تنظیمات → خود تنظیمات (نه منوی اصلی)."""
+    st = states.get_state(callback.user.id) or {}
+    stack = list(st.get("nav_stack") or [])
+    # پاک کردن اکشن جاری ولی نگه‌داشتن stack در صورت نیاز
+    if stack:
+        target = stack.pop()
+        states.set_state(callback.user.id, nav_stack=stack)
+        if target == "settings":
+            await open_admin_settings(callback)
+            return
+        if target == "settings_shifts":
+            await cb_settings_shifts(callback)
+            return
+        if isinstance(target, str) and target.startswith("shmgmt:"):
+            await cb_shift_mgmt(callback, target)
+            return
+        if target == "settings_regions":
+            regions = await run_db(db.list_regions)
+            await _ui_reply(callback, "مناطق:", kb.regions_manage_keyboard(regions))
+            return
+        if target == "settings_shiftleads":
+            leads = await run_db(db.list_shift_leads)
+            cap = await run_db(db.get_max_shift_leads)
+            await _ui_reply(
+                callback,
+                f"مسئولان شیفت ({len(leads)} از سقف {cap}):",
+                kb.shift_leads_manage_keyboard(leads),
+            )
+            return
+    # پیش‌فرض: برگشت به تنظیمات
     states.clear_state(callback.user.id)
-    db_user = await run_db(db.get_user, callback.user.id)
-    await callback.message.reply("بازگشت:", components=kb.menu_for_user(db_user))
+    await open_admin_settings(callback)
+
+
+def nav_push(uid: int, screen: str):
+    """ثبت صفحهٔ فعلی در پشتهٔ بازگشت."""
+    st = states.get_state(uid) or {}
+    stack = list(st.get("nav_stack") or [])
+    if not stack or stack[-1] != screen:
+        stack.append(screen)
+    # حفظ بقیهٔ state
+    kwargs = {k: v for k, v in st.items() if k != "nav_stack"}
+    states.set_state(uid, nav_stack=stack, **kwargs)
 
 
 async def _safe_edit_or_reply(callback: CallbackQuery, text: str, components=None):
