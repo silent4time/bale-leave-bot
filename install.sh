@@ -101,9 +101,13 @@ progress_bar 100 "venv ready"
 
 # 3) deps
 step_banner 3 5 "Install packages"
-progress_bar 15 "Upgrading pip..."
-run_with_spinner "Upgrading pip" pip install --upgrade pip || true
-progress_bar 40 "Installing requirements (please wait)..."
+echo ""
+echo "==> Dependencies"
+if run_with_spinner "Upgrading pip" pip install --upgrade pip; then
+  echo "[OK] pip upgraded"
+else
+  echo "[WARN] pip upgrade skipped"
+fi
 if run_with_spinner "Installing requirements" pip install -r requirements.txt; then
   progress_bar 100 "Dependencies installed"
 else

@@ -361,8 +361,8 @@ async def finalize_registration(message: Message, author, token):
                     if invite["shift_index"] < len(letters):
                         shift_txt = f"\nشیفت: {letters[invite['shift_index']]}"
             db_user = await run_db(db.get_user, uid)
-            term_r = await run_db(db.get_term_region)
-            term_g = await run_db(db.get_term_group)
+            term_r = await _term_region()
+            term_g = await _term_group()
             await message.reply(
                 f"✅ ثبت‌نام شما تکمیل و عضویتتان تایید شد.\nنقش: {role_label}{shift_txt}\n"
                 f"{term_r}: {region['name'] if region else '-'}\n{term_g}: {group['name'] if group else '-'}",
@@ -634,7 +634,11 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         if not name:
             await message.reply("نام نمی‌تواند خالی باشد:")
             return True
-        await run_db(db.set_term_region, name)
+        try:
+            await run_db(db.set_term_region, name)
+        except Exception:
+            # fallback مستقیم
+            await run_db(db.set_setting, "term_region", name)
         states.clear_state(author.id)
         await message.reply(f"✅ عنوان منطقه کاری: «{name}»", components=kb.admin_menu())
         return True
@@ -644,7 +648,10 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         if not name:
             await message.reply("نام نمی‌تواند خالی باشد:")
             return True
-        await run_db(db.set_term_group, name)
+        try:
+            await run_db(db.set_term_group, name)
+        except Exception:
+            await run_db(db.set_setting, "term_group", name)
         states.clear_state(author.id)
         await message.reply(f"✅ عنوان گروه کاری: «{name}»", components=kb.admin_menu())
         return True
@@ -1605,11 +1612,11 @@ async def on_callback(callback: CallbackQuery):
             await cb_settings_terms(callback)
         elif data == "settings_term_region":
             states.set_state(callback.user.id, action="set_term_region")
-            cur = await run_db(db.get_term_region)
+            cur = await _term_region()
             await callback.message.reply(f"نام فعلی «منطقه»: {cur}\nنام جدید را وارد کنید:")
         elif data == "settings_term_group":
             states.set_state(callback.user.id, action="set_term_group")
-            cur = await run_db(db.get_term_group)
+            cur = await _term_group()
             await callback.message.reply(f"نام فعلی «گروه»: {cur}\nنام جدید را وارد کنید:")
         elif data == "settings_shifts":
             await cb_settings_shifts(callback)
@@ -2298,7 +2305,7 @@ async def _show_region_picker(callback: CallbackQuery, user_id, role_code, shift
         all_regions = await run_db(db.list_regions)
         regions = [r for r in all_regions if r["id"] in allowed]
     if not regions:
-        term_r = await run_db(db.get_term_region)
+        term_r = await _term_region()
         await callback.message.edit(f"هیچ {term_r} در محدوده‌ی دسترسی شما نیست. ابتدا یکی بسازید.")
         return
     # مسئول شیفت: چندمنطقه‌ای
@@ -2311,7 +2318,7 @@ async def _show_region_picker(callback: CallbackQuery, user_id, role_code, shift
             shift_code=str(shift_code),
             selected=[],
         )
-        term_r = await run_db(db.get_term_region)
+        term_r = await _term_region()
         await callback.message.edit(
             f"{term_r} تحت مدیریت این مسئول شیفت را انتخاب کنید (چندتایی):",
             components=kb.multi_region_toggle_keyboard(
@@ -2319,7 +2326,7 @@ async def _show_region_picker(callback: CallbackQuery, user_id, role_code, shift
             ),
         )
         return
-    term_r = await run_db(db.get_term_region)
+    term_r = await _term_region()
     await callback.message.edit(
         f"{term_r} این فرد را انتخاب کنید:",
         components=kb.region_select_keyboard(regions, f"aprv_region:{user_id}:{role_code}:{shift_code}"),
@@ -2340,12 +2347,12 @@ async def cb_aprv_region(callback: CallbackQuery, data: str):
         return
     groups = await run_db(db.list_member_groups, region_id)
     if not groups:
-        term_g = await run_db(db.get_term_group)
+        term_g = await _term_group()
         await callback.message.edit(
             f"این منطقه هنوز {term_g} ندارد. ابتدا یکی بسازید."
         )
         return
-    term_g = await run_db(db.get_term_group)
+    term_g = await _term_group()
     await callback.message.edit(
         f"{term_g} این فرد را انتخاب کنید:",
         components=kb.group_select_keyboard(
@@ -2838,6 +2845,19 @@ if __name__ == "__main__":
 
 
 # ========================================================= مدیریت شیفت‌ها (تنظیمات)
+
+async def _term_region() -> str:
+    try:
+        return await _term_region()
+    except Exception:
+        return "منطقه کاری"
+
+async def _term_group() -> str:
+    try:
+        return await _term_group()
+    except Exception:
+        return "گروه کاری"
+
 async def _ui_reply(callback: CallbackQuery, text: str, components=None):
     """همیشه پاسخ بده — اول edit، اگر نشد reply."""
     try:
@@ -2858,13 +2878,18 @@ async def _ui_reply(callback: CallbackQuery, text: str, components=None):
 
 
 async def cb_settings_terms(callback: CallbackQuery):
-    tr = await run_db(db.get_term_region)
-    tg = await run_db(db.get_term_group)
-    from bale import InlineKeyboardMarkup, InlineKeyboardButton
-    kb_i = InlineKeyboardMarkup()
-    kb_i.add(InlineKeyboardButton(text=f"✏️ تغییر «{tr}»", callback_data="settings_term_region"), row=1)
-    kb_i.add(InlineKeyboardButton(text=f"✏️ تغییر «{tg}»", callback_data="settings_term_group"), row=2)
-    await _ui_reply(callback, f"واژه‌های قابل تغییر:\n• منطقه: {tr}\n• گروه: {tg}", kb_i)
+    try:
+        tr = await _term_region()
+        tg = await _term_group()
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        kb_i = InlineKeyboardMarkup()
+        kb_i.add(InlineKeyboardButton(text=f"تغییر: {tr}", callback_data="settings_term_region"), row=1)
+        kb_i.add(InlineKeyboardButton(text=f"تغییر: {tg}", callback_data="settings_term_group"), row=2)
+        await _ui_reply(callback, f"واژه‌های قابل تغییر:\n• منطقه: {tr}\n• گروه: {tg}", kb_i)
+    except Exception:
+        logger.exception("settings_terms failed")
+        await _ui_reply(callback, "خطا در باز کردن واژه‌ها. اگر تازه آپدیت کردید، database.py را هم جایگزین کنید.")
+
 
 
 async def cb_settings_shifts(callback: CallbackQuery):
@@ -2877,7 +2902,10 @@ async def cb_settings_shifts(callback: CallbackQuery):
     from bale import InlineKeyboardMarkup, InlineKeyboardButton
     kb_i = InlineKeyboardMarkup()
     for i, letter in enumerate(letters):
-        leads = await run_db(db.list_leads_for_shift, i)
+        try:
+            leads = await run_db(db.list_leads_for_shift, i)
+        except Exception:
+            leads = []
         n = len(leads) if leads else 0
         kb_i.add(
             InlineKeyboardButton(
@@ -2902,7 +2930,10 @@ async def cb_shift_mgmt(callback: CallbackQuery, data: str):
         return
     letters = shift.shift_letters(cfg["shift_count"])
     letter = letters[idx] if idx < len(letters) else str(idx)
-    leads = await run_db(db.list_leads_for_shift, idx) or []
+    try:
+        leads = await run_db(db.list_leads_for_shift, idx) or []
+    except Exception:
+        leads = []
     try:
         cur_slot = _shift_slot_index(cfg, idx, today_str())
         slot_name = cfg["labels"][cur_slot]["name"] if cfg.get("labels") else "?"
@@ -3096,8 +3127,8 @@ async def cb_shreg_info(callback: CallbackQuery, data: str):
     region = await run_db(db.get_region, rid)
     stats = await run_db(db.region_group_stats, rid) or {}
     groups = await run_db(db.list_member_groups, rid) or []
-    term_r = await run_db(db.get_term_region)
-    term_g = await run_db(db.get_term_group)
+    term_r = await _term_region()
+    term_g = await _term_group()
     lines = [f"• {g['name']} (ظرفیت {g['max_concurrent']})" for g in groups]
     text = (
         f"{term_r}: {region['name'] if region else rid}\n"

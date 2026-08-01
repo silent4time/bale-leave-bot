@@ -256,11 +256,16 @@ do_install() {
   progress_bar 100 "Virtualenv ready"
 
   step_banner 3 5 "Install Python packages"
-  progress_bar 10 "Upgrading pip..."
-  run_with_spinner "Upgrading pip" pip install --upgrade pip || true
-  progress_bar 40 "Installing requirements (this may take a minute)..."
+  echo ""
+  echo -e "${C_GOLD}==> Dependencies${C_RESET}"
+  if run_with_spinner "Upgrading pip" pip install --upgrade pip; then
+    ok "pip upgraded"
+  else
+    warn "pip upgrade skipped/failed"
+  fi
   if run_with_spinner "Installing requirements" pip install -r requirements.txt; then
     progress_bar 100 "Dependencies installed"
+    ok "Dependencies ready"
   else
     err "pip install failed"
     return 1
@@ -380,11 +385,16 @@ do_update() {
 
   activate_venv "$target"
   info "Updating Python dependencies..."
-  progress_bar 20 "Upgrading pip..."
-  run_with_spinner "Upgrading pip" pip install --upgrade pip || true
-  progress_bar 50 "Updating requirements..."
-  if run_with_spinner "Updating requirements" pip install -r requirements.txt; then
+  echo ""
+  echo -e "${C_GOLD}==> Dependencies${C_RESET}"
+  if run_with_spinner "Upgrading pip" pip install --upgrade pip; then
+    ok "pip upgraded"
+  else
+    warn "pip upgrade skipped/failed"
+  fi
+  if run_with_spinner "Installing requirements" pip install -r requirements.txt; then
     progress_bar 100 "Dependencies updated"
+    ok "Dependencies ready"
   else
     err "pip install failed"
     return 1
