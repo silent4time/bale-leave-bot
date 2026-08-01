@@ -219,6 +219,23 @@ async def on_message(message: Message):
         )
         return
 
+    # هدایت به منوی نقش
+    if db_user.get("is_admin"):
+        await handle_admin_menu(message, author, text)
+        return
+    if db_user.get("is_shift_lead"):
+        await handle_shift_lead_menu(message, author, db_user, text)
+        return
+    if db_user.get("is_senior") or db_user.get("role") == "snr":
+        await handle_senior_menu(message, author, db_user, text)
+        return
+    if db_user.get("approved"):
+        await handle_user_menu(message, author, db_user, text)
+        return
+    await message.reply(
+        "هنوز در انتظار تایید هستید. پس از تعیین نقش و گروه می‌توانید از منو استفاده کنید."
+    )
+
 
 async def handle_start(message: Message, author, text: str):
     parts = text.split(maxsplit=1)
@@ -855,6 +872,7 @@ async def handle_admin_menu(message: Message, author, text: str):
         return
 
     if text == kb.ADMIN_BTN_INVITE:
+        db_user = await run_db(db.get_user, author.id)
         roles = allowed_add_roles(db_user)
         if not roles:
             await message.reply("شما اجازه‌ی افزودن عضو ندارید.")
@@ -877,7 +895,34 @@ async def handle_admin_menu(message: Message, author, text: str):
         )
         return
 
-    
+    if text == kb.ADMIN_BTN_REPORT:
+        rows = await run_db(db.list_all_future_leaves, today_str())
+        if not rows:
+            await message.reply("مرخصی فعالی (از امروز به بعد) ثبت نشده است.")
+            return
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+        await send_leaves_report_pdf(
+            message, rows, title="گزارش مرخصی‌های فعال", letters=letters
+        )
+        return
+
+    if text == kb.ADMIN_BTN_SETTINGS:
+        states.set_state(author.id, nav_stack=["settings"])
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        await message.reply(
+            "⚙️ تنظیمات ربات",
+            components=kb.settings_keyboard(
+                mode, is_admin=True, shift_count=cfg["shift_count"] if cfg else None
+            ),
+        )
+        return
+
+    await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=kb.admin_menu())
+
+
 async def send_leaves_report_pdf(message: Message, rows: list, *, title: str, letters: list = None):
     """ساخت PDF جدول‌دار و ارسال به کاربر؛ در صورت خطا متن جدول ارسال می‌شود."""
     letters = letters or []
@@ -908,51 +953,6 @@ async def send_leaves_report_pdf(message: Message, rows: list, *, title: str, le
         logger.exception("pdf report failed; falling back to text table")
         table = format_leaves_table(rows, letters=letters)
         await message.reply(f"📊 {title}\n\n" + table)
-
-
-    if text == kb.ADMIN_BTN_REPORT:
-        rows = await run_db(db.list_all_future_leaves, today_str())
-        if not rows:
-            await message.reply("مرخصی فعالی (از امروز به بعد) ثبت نشده است.")
-            return
-        mode = await run_db(db.get_calendar_mode)
-        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
-        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
-        await send_leaves_report_pdf(
-            message, rows, title="گزارش مرخصی‌های فعال", letters=letters
-        )
-        return
-        mode = await run_db(db.get_calendar_mode)
-        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
-        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
-        table = format_leaves_table(rows, letters=letters)
-        text_out = "📊 گزارش مرخصی‌های فعال\n\n" + table
-        if len(text_out) <= 3500:
-            await message.reply(text_out)
-        else:
-            lines = table.split("\n")
-            buf = "📊 گزارش مرخصی‌های فعال\n\n"
-            for line in lines:
-                if len(buf) + len(line) + 1 > 3500:
-                    await message.reply(buf)
-                    buf = line + "\n"
-                else:
-                    buf += line + "\n"
-            if buf.strip():
-                await message.reply(buf)
-        return
-
-    if text == kb.ADMIN_BTN_SETTINGS:
-        states.set_state(author.id, nav_stack=["settings"])
-        mode = await run_db(db.get_calendar_mode)
-        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
-        await message.reply(
-            "⚙️ تنظیمات ربات",
-            components=kb.settings_keyboard(mode, is_admin=True, shift_count=cfg["shift_count"] if cfg else None),
-        )
-        return
-
-    await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=kb.admin_menu())
 
 
 # ==========================================================================
