@@ -2547,8 +2547,22 @@ async def cb_addvia(callback: CallbackQuery, data: str):
 
 
 async def cb_invite_role(callback: CallbackQuery, data: str):
-
     role_code = data.split(":", 1)[1]
+    viewer = await run_db(db.get_user, callback.user.id)
+    is_snr_only = (
+        viewer
+        and (viewer.get("is_senior") or viewer.get("role") == "snr")
+        and not viewer.get("is_admin")
+        and not viewer.get("is_shift_lead")
+    )
+    if is_snr_only:
+        shift_code = (
+            str(viewer["shift_index"])
+            if viewer.get("shift_index") is not None
+            else "none"
+        )
+        await _show_invite_region_picker(callback, role_code, shift_code)
+        return
     mode = await run_db(db.get_calendar_mode)
     cfg = await run_db(db.get_shift_config) if mode == "shift" else None
     if cfg:
@@ -2768,10 +2782,28 @@ async def cb_approve_start(callback: CallbackQuery, data: str):
 
 
 async def cb_set_role(callback: CallbackQuery, data: str):
-    """مرحله‌ی بعد از انتخاب نقش: اگر تقویم شیفتی است، شیفت را می‌پرسیم؛ وگرنه می‌رویم سراغ منطقه."""
+    """بعد از نقش: شیفت فقط برای مدیر/مسئول شیفت؛ ارشد شیفت خودش را به ارث می‌برد."""
     _, user_id, role_code = data.split(":")
+    viewer = await run_db(db.get_user, callback.user.id)
     mode = await run_db(db.get_calendar_mode)
     cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+
+    # تکنسین ارشد: بدون پرسش شیفت — از شیفت خودش استفاده می‌شود
+    is_snr_only = (
+        viewer
+        and (viewer.get("is_senior") or viewer.get("role") == "snr")
+        and not viewer.get("is_admin")
+        and not viewer.get("is_shift_lead")
+    )
+    if is_snr_only:
+        shift_code = (
+            str(viewer["shift_index"])
+            if viewer.get("shift_index") is not None
+            else "none"
+        )
+        await _show_region_picker(callback, user_id, role_code, shift_code)
+        return
+
     if cfg:
         await callback.message.edit(
             "شیفتِ این فرد را انتخاب کنید:",

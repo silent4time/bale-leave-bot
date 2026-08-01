@@ -1677,8 +1677,8 @@ def list_shift_lead_region_ids(user_id: int) -> list:
 def can_manage_region(user_id: int, region_id: int) -> bool:
     """
     مدیر → همه مناطق.
-    مسئول شیفت → فقط مناطق داخل shift_lead_regions.
-    (تکنسین ارشد در این تابع لحاظ نمی‌شود؛ محدوده‌ی او فقط گروهِ خودش است — از can_manage_group استفاده کنید.)
+    مسئول شیفت → مناطق داخل shift_lead_regions.
+    تکنسین ارشد → فقط منطقهٔ خودش.
     """
     u = get_user(user_id)
     if not u:
@@ -1687,6 +1687,11 @@ def can_manage_region(user_id: int, region_id: int) -> bool:
         return True
     if u.get("is_shift_lead") and region_id in list_shift_lead_region_ids(user_id):
         return True
+    if (u.get("is_senior") or u.get("role") == "snr") and u.get("region_id") is not None:
+        try:
+            return int(u["region_id"]) == int(region_id)
+        except (TypeError, ValueError):
+            return False
     return False
 
 
@@ -1720,8 +1725,14 @@ def assignable_group_ids(user_id: int) -> list:
     if u.get("is_shift_lead"):
         for rid in list_shift_lead_region_ids(user_id):
             ids += [g["id"] for g in list_groups(rid)]
-    if u.get("is_senior") and u.get("group_id") and u["group_id"] not in ids:
-        ids.append(u["group_id"])
+    if u.get("is_senior") or u.get("role") == "snr":
+        rid = u.get("region_id")
+        if rid is not None:
+            for g in list_groups(rid):
+                if g["id"] not in ids:
+                    ids.append(g["id"])
+        elif u.get("group_id") and u["group_id"] not in ids:
+            ids.append(u["group_id"])
     return ids
 
 
