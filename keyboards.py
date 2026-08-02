@@ -24,6 +24,7 @@ BTN_ADD_CONTACT = BTN_ADD_PEOPLE  # سازگاری
 BTN_REGION_LEAVES = "📋 وضعیت مرخصی منطقه من"
 BTN_OVER_CAP_LEAVE = "➕ درخواست مرخصی اضافه بر ظرفیت"
 BTN_BROADCAST = "📢 پیام همگانی"
+CONTACT_CANCEL_TEXT = "❌ انصراف از افزودن مخاطب"
 BTN_RESET_BOT = "🔄 ریست ربات"
 
 def term_labels(term_region: str = "منطقه کاری", term_group: str = "گروه کاری") -> dict:
@@ -219,8 +220,13 @@ def user_menu(term_region: str = "منطقه کاری", term_group: str = "گر�
 def contact_request_menu() -> MenuKeyboardMarkup:
     """کیبورد موقتی که با زدنش، بله مخاطبی از دفترچه‌تلفن کاربر برای ربات ارسال می‌کند."""
     kb = MenuKeyboardMarkup()
-    kb.add(MenuKeyboardButton("📱 انتخاب و ارسال مخاطب", request_contact=True))
-    kb.add(MenuKeyboardButton(CONTACT_CANCEL_TEXT))
+    try:
+        kb.add(MenuKeyboardButton("📱 انتخاب و ارسال مخاطب", request_contact=True))
+    except TypeError:
+        # اگر API پارامتر request_contact نداشت
+        kb.add(MenuKeyboardButton("📱 انتخاب و ارسال مخاطب"))
+    cancel = globals().get("CONTACT_CANCEL_TEXT") or "❌ انصراف از افزودن مخاطب"
+    kb.add(MenuKeyboardButton(cancel))
     return kb
 
 

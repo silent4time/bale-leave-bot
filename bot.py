@@ -3357,16 +3357,22 @@ async def cb_addvia(callback: CallbackQuery, data: str):
     if method == "contact":
         states.set_state(callback.user.id, action="awaiting_contact", purpose="add")
         try:
-            await callback.message.reply(
-                "دفترچه تلفن را باز کنید و مخاطب را انتخاب کنید.\n"
-                "روی دکمه «انتخاب و ارسال مخاطب» بزنید.",
-                components=kb.contact_request_menu(),
-            )
+            menu = kb.contact_request_menu()
         except Exception:
-            await callback.message.reply(
-                "دفترچه تلفن را باز کنید و مخاطب را انتخاب کنید.",
-                components=kb.contact_request_menu(),
-            )
+            logger.exception("contact_request_menu failed")
+            menu = None
+        text_msg = (
+            "دفترچه تلفن را باز کنید و مخاطب را انتخاب کنید.\n"
+            "روی دکمه «انتخاب و ارسال مخاطب» بزنید."
+        )
+        try:
+            if menu is not None:
+                await callback.message.reply(text_msg, components=menu)
+            else:
+                await callback.message.reply(text_msg)
+        except Exception:
+            logger.exception("reply contact menu failed")
+            await callback.message.reply("لطفاً یک مخاطب از دفترچه تلفن برای ربات ارسال کنید.")
         return
     await _ui_reply(callback, "گزینه نامعتبر.")
 
