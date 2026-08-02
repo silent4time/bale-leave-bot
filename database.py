@@ -1610,7 +1610,7 @@ def list_pending_review_queue(limit: int = 100):
 
 
 def list_leaves_for_month(jy: int, jm: int, region_ids: list = None, limit: int = 500):
-    """مرخصی‌های یک ماه شمسی (همه وضعیت‌های فعال و رد/تایید برای گزارش).
+    """مرخصی‌های تاییدشده یک ماه شمسی (فقط status=approved).
     region_ids=None → همه؛ وگرنه فقط کاربران آن مناطق.
     """
     prefix = f"{int(jy):04d}-{int(jm):02d}-"
@@ -1625,6 +1625,7 @@ def list_leaves_for_month(jy: int, jm: int, region_ids: list = None, limit: int 
                 LEFT JOIN groups g ON g.id = u.group_id
                 LEFT JOIN regions r ON r.id = u.region_id
                 WHERE l.leave_date LIKE ?
+                  AND l.status = 'approved'
                 ORDER BY l.leave_date, u.last_name, u.first_name
                 LIMIT ?
                 """,
@@ -1643,6 +1644,7 @@ def list_leaves_for_month(jy: int, jm: int, region_ids: list = None, limit: int 
                 LEFT JOIN groups g ON g.id = u.group_id
                 LEFT JOIN regions r ON r.id = u.region_id
                 WHERE l.leave_date LIKE ?
+                  AND l.status = 'approved'
                   AND u.region_id IN ({ph})
                 ORDER BY l.leave_date, u.last_name, u.first_name
                 LIMIT ?

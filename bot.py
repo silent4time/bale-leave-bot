@@ -1007,7 +1007,10 @@ async def show_region_leaves_status(message: Message, db_user: dict):
         st = STATUS_FA.get(r.get("status"), r.get("status") or "-")
         g = r.get("group_name") or "-"
         rn = r.get("region_name") or "-"
-        lines.append(f"{i}. {name} | {day} | {g} | {rn} | {st}")
+        kind = "مازاد" if int(r.get("over_capacity") or 0) == 1 else "عادی"
+        lines.append(
+            f"{i}. {name} | {day} | {g} | {rn} | وضعیت: {st} | نوع: {kind}"
+        )
 
     text = title + "\n\n" + "\n".join(lines)
     if len(text) <= 3500:

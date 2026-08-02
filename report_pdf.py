@@ -135,7 +135,7 @@ def build_leaves_pdf(
         fontName=_FONT_REG,
         fontSize=9,
         leading=12,
-        alignment=TA_CENTER,
+        alignment=TA_RIGHT,
     )
     style_head = ParagraphStyle(
         "FaHead",
@@ -156,8 +156,9 @@ def build_leaves_pdf(
         story.append(Paragraph(fa(f"تاریخ تهیه: {now}"), style_sub))
     story.append(Spacer(1, 4 * mm))
 
-    headers = ["ردیف", "نام و نام‌خانوادگی", "شیفت", "منطقه", "گروه", "روز مرخصی"]
-    table_data = [[Paragraph(fa(h), style_head) for h in headers]]
+    # ترتیب منطقی (از راست به چپ در خروجی)
+    headers_rtl = ["نوع", "وضعیت", "روز مرخصی", "گروه", "منطقه", "شیفت", "نام و نام‌خانوادگی", "ردیف"]
+    table_data = [[Paragraph(fa(h), style_head) for h in headers_rtl]]
 
     def _name(r):
         first = r.get("first_name") or ""
@@ -174,26 +175,48 @@ def build_leaves_pdf(
         return "-"
 
     def _day(r):
-        # انتظار: leave_date_fa از بیرون، یا leave_date خام
         if r.get("leave_date_fa"):
             return r["leave_date_fa"]
         return str(r.get("leave_date") or "-")
 
+    STATUS_FA = {
+        "pending": "در انتظار",
+        "reviewing": "در بررسی",
+        "approved": "تایید شده",
+        "rejected": "رد شده",
+        "cancelled": "لغو شده",
+    }
+
+    def _status(r):
+        return STATUS_FA.get(r.get("status"), r.get("status") or "-")
+
+    def _kind(r):
+        try:
+            if int(r.get("over_capacity") or 0) == 1:
+                return "اضافه بر ظرفیت"
+        except (TypeError, ValueError):
+            pass
+        return "عادی"
+
     for i, r in enumerate(rows, 1):
+        # همان ترتیب RTL: نوع ... ردیف (ردیف در سمت راست صفحه)
         cells = [
-            str(i),
-            _name(r),
-            _shift(r),
-            r.get("region_name") or "-",
-            r.get("group_name") or "-",
+            _kind(r),
+            _status(r),
             _day(r),
+            r.get("group_name") or "-",
+            r.get("region_name") or "-",
+            _shift(r),
+            _name(r),
+            str(i),
         ]
         table_data.append([Paragraph(fa(c), style_cell) for c in cells])
 
     if len(table_data) == 1:
-        table_data.append([Paragraph(fa("موردی ثبت نشده"), style_cell)] + [""] * 5)
+        table_data.append([Paragraph(fa("موردی ثبت نشده"), style_cell)] + [""] * 7)
 
-    col_widths = [18 * mm, 55 * mm, 22 * mm, 40 * mm, 40 * mm, 35 * mm]
+    # عرض ستون‌ها متناظر با headers_rtl
+    col_widths = [28 * mm, 26 * mm, 28 * mm, 32 * mm, 32 * mm, 18 * mm, 48 * mm, 14 * mm]
     table = Table(table_data, colWidths=col_widths, repeatRows=1)
 
     style_cmds = [
@@ -202,7 +225,9 @@ def build_leaves_pdf(
         ("FONTNAME", (0, 0), (-1, 0), _FONT_BOLD),
         ("FONTNAME", (0, 1), (-1, -1), _FONT_REG),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+        ("ALIGN", (7, 0), (7, -1), "CENTER"),  # ردیف
+
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#9db4c8")),
         ("BOX", (0, 0), (-1, -1), 1.2, colors.HexColor("#0f4c81")),
