@@ -12,6 +12,7 @@ import shift
 import calendar_ui
 import keyboards as kb
 import states
+import cache
 import report_pdf
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -351,11 +352,19 @@ async def finalize_registration(message: Message, author, token):
             if not region_ids and invite.get("region_id"):
                 region_ids = [invite["region_id"]]
             try:
-                await run_db(
-                    db.appoint_shift_lead, uid, region_ids, invite.get("shift_index")
-                )
+                purpose = await run_db(db.get_setting, f"invite_purpose_{token}", "")
+                creator = invite.get("created_by")
+                if purpose == "transfer_lead" and creator:
+                    await run_db(db.transfer_shift_lead, int(creator), uid)
+                else:
+                    await run_db(
+                        db.appoint_shift_lead, uid, region_ids, invite.get("shift_index")
+                    )
             except ValueError as e:
                 await message.reply(fa_error(e))
+                return
+            except Exception as e:
+                await message.reply(f"خطا در انتصاب: {e}")
                 return
             names = []
             for rid in region_ids:
@@ -408,6 +417,21 @@ async def finalize_registration(message: Message, author, token):
             return
         if invite:
             await run_db(db.increment_invite_use, token)
+            purpose = await run_db(db.get_setting, f"invite_purpose_{token}", "")
+            if purpose == "replace_admin":
+                creator = invite.get("created_by")
+                if creator and int(creator) != uid:
+                    try:
+                        await run_db(db.replace_admin, int(creator), uid)
+                        db_user = await run_db(db.get_user, uid)
+                        await message.reply(
+                            "🎉 شما مدیر جدید ربات شدید.",
+                            components=await menu_with_terms(db_user),
+                        )
+                        return
+                    except Exception as e:
+                        await message.reply(f"خطا در انتقال مدیریت: {e}")
+                        return
 
     await message.reply("✅ ثبت‌نام شما تکمیل شد؛ اکنون منتظر تایید مدیر (تعیین نقش و گروه) بمانید.")
     db_user = await run_db(db.get_user, uid)
@@ -428,23 +452,83 @@ async def notify_admins_new_pending(db_user: dict):
 
 
 async def handle_contact_shared(message: Message, author, contact):
-    """
-    پردازش مخاطبی که مدیر/مسئول شیفت/ارشد از دفترچه‌تلفن گوشی‌اش فرستاده.
-    - اگر آن شماره متعلق به یک کاربر شناخته‌شده‌ی بله باشد (contact.user موجود باشد)،
-      مستقیم وارد جریان تعیین نقش/گروه می‌شویم (دقیقاً مثل تایید یک کاربر در-انتظار).
-    - در غیر این‌صورت (شماره ناشناس یا حریم خصوصی مانع شناسایی شده)، یک لینک دعوت
-      پیشنهاد می‌شود تا خودشان برای آن شخص بفرستند.
-    """
+    """دفترچه تلفن: افزودن عضو / جانشینی مدیر / انتقال مسئول شیفت."""
+    st = states.get_state(author.id) or {}
+    purpose = st.get("purpose") or "add"
     states.clear_state(author.id)
     db_user = await run_db(db.get_user, author.id)
-    if not db_user or not (db_user.get("is_admin") or await run_db(db.assignable_group_ids, author.id)):
-        await message.reply("شما اجازه‌ی افزودن عضو ندارید.")
+    if not db_user:
         return
 
     target_user = getattr(contact, "user", None)
     shared_first = getattr(contact, "first_name", None) or ""
     shared_last = getattr(contact, "last_name", None) or ""
     name = f"{shared_first} {shared_last}".strip()
+    phone = getattr(contact, "phone_number", None) or "؟"
+
+    # --- جانشینی مدیر ---
+    if purpose == "replace_admin":
+        if not db_user.get("is_admin"):
+            await message.reply("فقط مدیر می‌تواند جانشین تعیین کند.")
+            return
+        if target_user is None:
+            await message.reply(
+                "این مخاطب به حساب بله وصل نشد. از «لینک واگذاری» استفاده کنید یا مخاطبی که در بله است انتخاب کنید.",
+                components=await menu_with_terms(db_user),
+            )
+            return
+        target_uid = target_user.id
+        await run_db(db.touch_user_bale_info, target_uid, getattr(target_user, "first_name", None) or shared_first, getattr(target_user, "username", None))
+        try:
+            await run_db(db.replace_admin, author.id, target_uid)
+        except Exception as e:
+            await message.reply(f"خطا در جایگزینی مدیر: {e}", components=await menu_with_terms(db_user))
+            return
+        await message.reply(
+            f"✅ مدیریت به «{name or target_uid}» منتقل شد. شما دیگر مدیر نیستید.",
+            components=kb.user_menu(),
+        )
+        try:
+            nu = await run_db(db.get_user, target_uid)
+            await client.send_message(target_uid, "🎉 شما مدیر جدید ربات شدید.", components=await menu_with_terms(nu) if nu else None)
+        except Exception:
+            logger.exception("notify new admin")
+        return
+
+    # --- انتقال مسئول شیفت ---
+    if purpose == "transfer_lead":
+        if not db_user.get("is_shift_lead"):
+            await message.reply("فقط مسئول شیفت می‌تواند نقش را منتقل کند.")
+            return
+        if target_user is None:
+            await message.reply(
+                "این مخاطب به حساب بله وصل نشد. از «لینک واگذاری» استفاده کنید.",
+                components=await menu_with_terms(db_user),
+            )
+            return
+        target_uid = target_user.id
+        await run_db(db.touch_user_bale_info, target_uid, getattr(target_user, "first_name", None) or shared_first, getattr(target_user, "username", None))
+        try:
+            await run_db(db.transfer_shift_lead, author.id, target_uid)
+        except Exception as e:
+            await message.reply(f"خطا در انتقال مسئول شیفت: {e}", components=await menu_with_terms(db_user))
+            return
+        await message.reply(
+            f"✅ نقش مسئول شیفت به «{name or target_uid}» منتقل شد.",
+            components=await menu_with_terms(await run_db(db.get_user, author.id)),
+        )
+        try:
+            nu = await run_db(db.get_user, target_uid)
+            await client.send_message(target_uid, "🎉 شما مسئول شیفت شدید.", components=await menu_with_terms(nu) if nu else None)
+        except Exception:
+            logger.exception("notify new lead")
+        return
+
+    # --- افزودن عضو ---
+    can_add = bool(allowed_add_roles(db_user))
+    if not can_add:
+        await message.reply("شما اجازه‌ی افزودن عضو ندارید.")
+        return
 
     if target_user is not None:
         target_uid = target_user.id
@@ -454,39 +538,29 @@ async def handle_contact_shared(message: Message, author, contact):
             getattr(target_user, "username", None),
         )
         existing = await run_db(db.get_user, target_uid)
-
         if existing and existing.get("is_admin"):
             await message.reply("این شخص از قبل مدیر ربات است.", components=await menu_with_terms(db_user))
             return
         if existing and existing.get("approved"):
             await message.reply(
-                f"«{name or display_name(existing)}» از قبل عضو تایید‌شده‌ی ربات است.",
+                f"«{name or display_name(existing)}» از قبل عضو تایید‌شده است.",
                 components=await menu_with_terms(db_user),
             )
             return
-
-        await message.reply("✅ دریافت شد؛ این شخص کاربر بله است.", components=await menu_with_terms(db_user))
+        roles = allowed_add_roles(db_user)
         await message.reply(
-            f"نقش «{name or target_uid}» را انتخاب کنید:",
-            components=kb.role_select_keyboard(f"setrole:{target_uid}", allowed_roles=allowed_add_roles(db_user)),
+            f"✅ مخاطب دریافت شد. نقش «{name or target_uid}» را یک‌بار انتخاب کنید:",
+            components=kb.role_select_keyboard(f"setrole:{target_uid}", allowed_roles=roles),
         )
         return
 
-    # شماره به کاربر بله شناخته‌شده‌ای وصل نشد (یا حریم خصوصی مانع شد) → لینک دعوت جایگزین
+    roles = allowed_add_roles(db_user)
     await message.reply(
-        "✅ دریافت شد؛ این شماره را نتوانستیم به یک حساب بله متصل کنیم "
-        "(یا حریم خصوصی‌اش اجازه نمی‌دهد).", components=await menu_with_terms(db_user),
-    )
-    phone = getattr(contact, "phone_number", None) or "؟"
-    await message.reply(
-        f"به‌جایش برای «{name or phone}» یک لینک دعوت می‌سازیم — نقش لینک را انتخاب کنید:",
-        components=kb.role_select_keyboard("invrole", allowed_roles=allowed_add_roles(db_user)),
+        f"این شماره به حساب بله وصل نشد ({phone}). نقش لینک دعوت را یک‌بار انتخاب کنید:",
+        components=kb.role_select_keyboard("invrole", allowed_roles=roles),
     )
 
 
-# ==========================================================================
-#  ورودی‌های متنی چندمرحله‌ای (فرم ثبت‌نام / ساخت گروه / تنظیمات شیفت)
-# ==========================================================================
 
 async def handle_stateful_text(message: Message, author, text: str, state: dict) -> bool:
     action = state.get("action")
@@ -903,6 +977,54 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         )
         return True
 
+    if action == "broadcast_subject":
+        subj = text.strip()
+        if not subj:
+            await message.reply("موضوع نمی‌تواند خالی باشد:")
+            return True
+        states.set_state(author.id, action="broadcast_body", subject=subj)
+        await message.reply("متن اصلی پیام را وارد کنید:")
+        return True
+
+    if action == "broadcast_body":
+        body = text.strip()
+        if not body:
+            await message.reply("متن پیام نمی‌تواند خالی باشد:")
+            return True
+        subject = state.get("subject") or "بدون موضوع"
+        with_btn = bool(state.get("with_btn"))
+        if not with_btn:
+            raw = await run_db(db.get_setting, "broadcast_with_button", "1")
+            with_btn = str(raw) not in ("0", "false", "False")
+        states.clear_state(author.id)
+        users = await run_db(db.list_all_user_ids_for_broadcast)
+        msg = f"📢 پیام همگانی\n\n📌 موضوع: {subject}\n\n{body}"
+        components = None
+        if with_btn:
+            from bale import InlineKeyboardMarkup, InlineKeyboardButton
+            components = InlineKeyboardMarkup()
+            components.add(
+                InlineKeyboardButton(text="🔄 ریست ربات", callback_data="bcast_reset:1"),
+                row=1,
+            )
+        ok = fail = 0
+        for uid in users:
+            try:
+                if components is not None:
+                    await client.send_message(uid, msg, components=components)
+                else:
+                    await client.send_message(uid, msg)
+                ok += 1
+            except Exception:
+                fail += 1
+        await message.reply(
+            f"✅ پیام همگانی ارسال شد.\n"
+            f"دکمه همراه: {'فعال' if with_btn else 'غیرفعال'}\n"
+            f"موفق: {ok} | ناموفق: {fail}",
+            components=await menu_with_terms(await run_db(db.get_user, author.id)),
+        )
+        return True
+
     states.clear_state(author.id)
     return False
 
@@ -1055,6 +1177,39 @@ async def show_region_leaves_status(message: Message, db_user: dict):
 
 async def handle_admin_menu(message: Message, author, text: str):
     tr, tg, L = await _terms()
+
+    if text in (getattr(kb, "BTN_BROADCAST", "📢 پیام همگانی"), "📢 پیام همگانی"):
+        u = await run_db(db.get_user, author.id)
+        if not u or not u.get("is_admin"):
+            await message.reply("فقط مدیر می‌تواند پیام همگانی بفرستد.")
+            return
+        raw = await run_db(db.get_setting, "broadcast_with_button", "1")
+        with_btn = str(raw) not in ("0", "false", "False", "")
+        states.set_state(author.id, action="broadcast_options", with_btn=with_btn)
+        await message.reply(
+            "📢 پیام همگانی\nآیا دکمه «ریست ربات» همراه پیام برای گیرندگان ارسال شود؟",
+            components=kb.broadcast_options_keyboard(with_btn),
+        )
+        return
+
+    if text in (getattr(kb, "BTN_RESET_BOT", "🔄 ریست ربات"), "🔄 ریست ربات"):
+        u = await run_db(db.get_user, author.id)
+        if not u or not u.get("is_admin"):
+            await message.reply("فقط مدیر.")
+            return
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        conf = InlineKeyboardMarkup()
+        conf.add(InlineKeyboardButton(text="✅ بله، ریست شود", callback_data="resetbot:yes"), row=1)
+        conf.add(InlineKeyboardButton(text="❌ انصراف", callback_data="resetbot:no"), row=2)
+        await message.reply(
+            "🔄 ریست ربات\n"
+            "حافظه موقت (حالت‌های در جریان کاربران) پاک می‌شود.\n"
+            "داده پایگاه (اعضا و مرخصی‌ها) حذف نمی‌شود.\n"
+            "ادامه؟",
+            components=conf,
+        )
+        return
+
     if text in (L["region_leaves"], getattr(kb, "BTN_REGION_LEAVES", "")):
         db_user = await run_db(db.get_user, author.id)
         await show_region_leaves_status(message, db_user)
@@ -1251,15 +1406,16 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
         return
 
     if text in (L["lead_groups"], kb.LEAD_BTN_GROUPS):
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
         lines = []
         all_groups = []
         for rid in region_ids:
-            region = await run_db(db.get_region, rid)
             groups = await run_db(db.list_groups, rid)
             all_groups.extend(groups)
-            rname = region["name"] if region else str(rid)
             for g in groups:
-                lines.append(f"• [{rname}] {g['name']} — ظرفیت {g['max_concurrent']}")
+                lines.append(await format_group_line(g, letters))
         if not lines:
             await message.reply("در مناطق شما گروهی نیست.")
             return
@@ -1285,7 +1441,7 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
         letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
         await message.reply(
             f"اعضای مناطق شما ({len(users_acc)} نفر):",
-            components=kb.all_users_keyboard(users_acc, mode == "shift", letters=letters),
+            components=kb.all_users_keyboard(users_acc, True, letters=letters),
         )
         return
         mode = await run_db(db.get_calendar_mode)
@@ -1345,7 +1501,10 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
         return
 
     if text == kb.LEAD_BTN_TRANSFER:
-        states.set_state(author.id, action="transfer_shift_lead_uid")
+        await message.reply(
+            "واگذاری نقش مسئول شیفت — روش را انتخاب کنید:",
+            components=kb.succession_method_keyboard("transfer_lead"),
+        )
         await message.reply(
             "شناسه عددی (user_id) کاربر جایگزین را وارد کنید.\n"
             "پس از انتقال، شما دیگر مسئول شیفت نخواهید بود."
@@ -1411,7 +1570,7 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
         filtered = [u for u in users if not u.get("is_senior") or u["user_id"] == author.id]
         await message.reply(
             f"اعضای منطقه ({len(filtered)} نفر):",
-            components=kb.all_users_keyboard(filtered, mode == "shift", letters=letters),
+            components=kb.all_users_keyboard(filtered, True, letters=letters),
         )
         return
         users = await run_db(db.list_all_active_users, region_id)
@@ -1429,7 +1588,7 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
         filtered = [u for u in users if not u.get("is_senior") or u["user_id"] == author.id]
         await message.reply(
             f"اعضای منطقه ({len(filtered)} نفر):",
-            components=kb.all_users_keyboard(filtered, mode == "shift", letters=letters),
+            components=kb.all_users_keyboard(filtered, True, letters=letters),
         )
         return
 
@@ -1455,7 +1614,10 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
         if not groups:
             await message.reply("گروهی در منطقه نیست.")
             return
-        lines = [f"• {g['name']} — ظرفیت {g['max_concurrent']}" for g in groups]
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+        lines = [await format_group_line(g, letters) for g in groups]
         await message.reply("گروه‌های منطقه:\n" + "\n".join(lines))
         return
 
@@ -1536,7 +1698,45 @@ def format_leaves_table(rows: list, *, letters: list = None) -> str:
 
 
 
+async def format_group_line(g: dict, letters: list = None) -> str:
+    """نام گروه + منطقه + شیفت‌های مرتبط با منطقه."""
+    letters = letters or []
+    name = g.get("name") or "-"
+    rid = g.get("region_id")
+    r = await run_db(db.get_region, rid) if rid else None
+    rname = r["name"] if r else "-"
+    shift_txt = ""
+    if rid is not None:
+        # شیفت مسئولان این منطقه یا اعضای گروه
+        try:
+            leads = await run_db(db.list_shift_leads_for_region, rid)
+        except Exception:
+            leads = []
+        idxs = []
+        for ld in leads or []:
+            si = ld.get("shift_index")
+            if si is not None and si not in idxs:
+                idxs.append(si)
+        if not idxs:
+            # از اعضای گروه
+            try:
+                members = await run_db(db.list_users_in_group, g["id"])
+                for m in members or []:
+                    si = m.get("shift_index")
+                    if si is not None and si not in idxs:
+                        idxs.append(si)
+            except Exception:
+                pass
+        if idxs and letters:
+            labs = [letters[int(i)] if 0 <= int(i) < len(letters) else str(i) for i in idxs]
+            shift_txt = f" — شیفت {'،'.join(labs)}"
+        elif idxs:
+            shift_txt = f" — شیفت {','.join(str(i) for i in idxs)}"
+    return f"• {name} — {rname}{shift_txt} (ظرفیت {g.get('max_concurrent', '-')})"
+
+
 async def show_all_users(message: Message):
+
     users = await run_db(db.list_all_active_users)
     if not users:
         await message.reply("هنوز عضو فعالی ثبت نشده است.")
@@ -1545,7 +1745,7 @@ async def show_all_users(message: Message):
     cfg = await run_db(db.get_shift_config) if mode == "shift" else None
     letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
     # یک‌بار برای هر نفر: نام (شیفت / منطقه / نقش)
-    keyboard = kb.all_users_keyboard(users, mode == "shift", letters=letters)
+    keyboard = kb.all_users_keyboard(users, True, letters=letters)
     await message.reply(
         f"لیست اعضا ({len(users)} نفر) — برای مدیریت روی نام بزنید:",
         components=keyboard,
@@ -2237,6 +2437,16 @@ async def on_callback(callback: CallbackQuery):
             await callback.message.reply("وضعیت‌ها ذخیره شده‌اند. می‌توانید دوباره آیکون‌ها را تغییر دهید.")
         elif data.startswith("rptm:"):
             await cb_report_month(callback, data)
+        elif data.startswith("bcastopt:"):
+            await cb_bcastopt(callback, data)
+        elif data.startswith("resetbot:"):
+            await cb_resetbot(callback, data)
+        elif data.startswith("succvia:"):
+            await cb_succvia(callback, data)
+        elif data.startswith("bcast_reset:"):
+            await cb_bcast_reset(callback, data)
+        elif data.startswith("bcast_ack:"):
+            await cb_bcast_reset(callback, data)
         elif data.startswith("addvia:"):
             await cb_addvia(callback, data)
         elif data.startswith("invrole:"):
@@ -2416,7 +2626,10 @@ async def on_callback(callback: CallbackQuery):
                 kb.shift_leads_manage_keyboard(leads),
             )
         elif data == "settings_replaceadmin":
-            states.set_state(callback.user.id, action="replace_admin_uid")
+            await callback.message.reply(
+                "جایگزینی مدیر — روش را انتخاب کنید:",
+                components=kb.succession_method_keyboard("replace_admin"),
+            )
             await callback.message.reply(
                 "شناسه عددی (user_id) کاربر جانشین مدیر را وارد کنید.\n"
                 "پس از تأیید، شما دیگر مدیر نخواهید بود و او مدیر می‌شود."
@@ -2906,7 +3119,156 @@ async def apply_leave_decision(decider_id: int, leave_id: int, new_status: str, 
 
 # ----------------------------------------------------- گروه‌ها / دعوت‌ها ----
 
+async def cb_bcastopt(callback: CallbackQuery, data: str):
+    viewer = await run_db(db.get_user, callback.user.id)
+    if not viewer or not viewer.get("is_admin"):
+        await _ui_reply(callback, "فقط مدیر.")
+        return
+    opt = data.split(":")[1]
+    if opt == "1":
+        await run_db(db.set_setting, "broadcast_with_button", "1")
+        states.set_state(callback.user.id, action="broadcast_options", with_btn=True)
+        await _ui_reply(
+            callback,
+            "📢 دکمه «ریست ربات» همراه پیام: فعال\nدر صورت تمایل ادامه را بزنید.",
+            kb.broadcast_options_keyboard(True),
+        )
+        return
+    if opt == "0":
+        await run_db(db.set_setting, "broadcast_with_button", "0")
+        states.set_state(callback.user.id, action="broadcast_options", with_btn=False)
+        await _ui_reply(
+            callback,
+            "📢 دکمه «ریست ربات» همراه پیام: غیرفعال\nدر صورت تمایل ادامه را بزنید.",
+            kb.broadcast_options_keyboard(False),
+        )
+        return
+    if opt == "go":
+        raw = await run_db(db.get_setting, "broadcast_with_button", "1")
+        with_btn = str(raw) not in ("0", "false", "False")
+        states.set_state(callback.user.id, action="broadcast_subject", with_btn=with_btn)
+        await _ui_reply(callback, "موضوع پیام همگانی را وارد کنید:")
+        return
+    await _ui_reply(callback, "گزینه نامعتبر.")
+
+
+async def cb_resetbot(callback: CallbackQuery, data: str):
+    viewer = await run_db(db.get_user, callback.user.id)
+    if not viewer or not viewer.get("is_admin"):
+        await _ui_reply(callback, "فقط مدیر.")
+        return
+    if data.endswith(":no"):
+        await _ui_reply(callback, "ریست لغو شد.")
+        return
+    # پاک‌سازی حافظه موقت
+    try:
+        states.PENDING_INPUT.clear()
+        states.SELECTION.clear()
+    except Exception:
+        pass
+    try:
+        if hasattr(cache, "clear"):
+            cache.clear()
+        elif hasattr(cache, "store") and hasattr(cache.store, "clear"):
+            cache.store.clear()
+    except Exception:
+        logger.exception("cache clear failed")
+    await _ui_reply(
+        callback,
+        "✅ ریست انجام شد.\nحالت‌های موقت کاربران پاک شد. داده دیتابیس دست نخورده است.\nهمه با /start منوی تازه می‌گیرند.",
+    )
+
+
+async def cb_bcast_reset(callback: CallbackQuery, data: str):
+    """ریست سمت کاربر: پاک‌سازی حالت موقت + منوی تازه (پس از آپدیت ربات)."""
+    uid = callback.user.id
+    try:
+        states.clear_state(uid)
+        states.clear_selection(uid)
+    except Exception:
+        pass
+    try:
+        cache.inv_user(uid)
+    except Exception:
+        pass
+    db_user = await run_db(db.get_user, uid)
+    menu = await menu_with_terms(db_user) if db_user else None
+    try:
+        await callback.message.edit(
+            "✅ ریست انجام شد.\nحالت موقت شما پاک شد. از منوی زیر استفاده کنید."
+        )
+    except Exception:
+        pass
+    if db_user and db_user.get("profile_complete"):
+        await callback.message.reply(
+            "منوی به‌روز:",
+            components=menu,
+        )
+    else:
+        await callback.message.reply("لطفاً /start را بزنید.")
+
+
+async def cb_bcast_ack(callback: CallbackQuery, data: str):
+    await cb_bcast_reset(callback, data)
+
+
+async def cb_succvia(callback: CallbackQuery, data: str):
+
+    """succvia:contact|link:replace_admin|transfer_lead"""
+    parts = data.split(":")
+    if len(parts) < 3:
+        await _ui_reply(callback, "گزینه نامعتبر.")
+        return
+    method, purpose = parts[1], parts[2]
+    viewer = await run_db(db.get_user, callback.user.id)
+    if purpose == "replace_admin" and not (viewer and viewer.get("is_admin")):
+        await _ui_reply(callback, "فقط مدیر.")
+        return
+    if purpose == "transfer_lead" and not (viewer and viewer.get("is_shift_lead")):
+        await _ui_reply(callback, "فقط مسئول شیفت.")
+        return
+    if method == "contact":
+        states.set_state(callback.user.id, action="awaiting_contact", purpose=purpose)
+        await callback.message.reply(
+            "مخاطب جانشین را از دفترچه تلفن انتخاب و ارسال کنید.",
+            components=kb.contact_request_menu(),
+        )
+        return
+    if method == "link":
+        token = secrets.token_urlsafe(8)
+        if purpose == "transfer_lead":
+            rids = await run_db(db.list_shift_lead_region_ids, callback.user.id) or []
+            await run_db(
+                db.create_invite, token, "lead", None, callback.user.id,
+                None, 0, viewer.get("shift_index") if viewer else None, 1, rids,
+            )
+            await run_db(db.set_setting, f"pending_lead_transfer_by_{callback.user.id}", token)
+            await run_db(db.set_setting, f"invite_purpose_{token}", "transfer_lead")
+        else:
+            # جانشین مدیر — نقش عادی؛ با فلگ در settings هنگام /start اعمال می‌شود
+            await run_db(
+                db.create_invite, token, None, None, callback.user.id,
+                None, 0, None, 0, None,
+            )
+            await run_db(db.set_setting, f"pending_admin_successor_by_{callback.user.id}", token)
+            await run_db(db.set_setting, f"invite_purpose_{token}", "replace_admin")
+        try:
+            me = await client.get_me()
+            uname = getattr(me, "username", None) or "BOT"
+            link = f"https://ble.ir/{uname}?start={token}"
+        except Exception:
+            link = f"/start {token}"
+        label = "جایگزینی مدیر" if purpose == "replace_admin" else "واگذاری مسئول شیفت"
+        await _ui_reply(
+            callback,
+            f"🔗 لینک {label}:\n{link}\n\nاین لینک را فقط برای فرد مورد نظر بفرستید. پس از باز کردن لینک و تکمیل ثبت‌نام، نقش منتقل می‌شود.",
+        )
+        return
+    await _ui_reply(callback, "گزینه نامعتبر.")
+
+
 async def cb_addvia(callback: CallbackQuery, data: str):
+
     """انتخاب روش افزودن: لینک یا دفترچه تلفن."""
     method = data.split(":", 1)[1]
     viewer = await run_db(db.get_user, callback.user.id)
@@ -2922,7 +3284,7 @@ async def cb_addvia(callback: CallbackQuery, data: str):
         )
         return
     if method == "contact":
-        states.set_state(callback.user.id, action="awaiting_contact")
+        states.set_state(callback.user.id, action="awaiting_contact", purpose="add")
         try:
             await callback.message.reply(
                 "دفترچه تلفن را باز کنید و مخاطب را انتخاب کنید.\n"

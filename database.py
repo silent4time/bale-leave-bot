@@ -946,7 +946,17 @@ def can_manage_group(user_id: int, group_id: int) -> bool:
     return False
 
 
+def list_all_user_ids_for_broadcast() -> list:
+    """همه کاربران با پروفایل کامل (برای پیام همگانی مدیر)."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT user_id FROM users WHERE profile_complete = 1"
+        ).fetchall()
+        return [int(r["user_id"]) for r in rows]
+
+
 def list_all_active_users(region_id: Optional[int] = None):
+
     q = """
         SELECT u.*, g.name AS group_name, g.color AS group_color,
                r.name AS region_name
@@ -1762,7 +1772,30 @@ def count_shift_leads() -> int:
         return row["c"]
 
 
+def list_shift_leads_for_region(region_id: int) -> list:
+    with _conn() as con:
+        rows = con.execute(
+            """
+            SELECT u.* FROM users u
+            JOIN shift_lead_regions slr ON slr.user_id = u.user_id
+            WHERE slr.region_id = ? AND IFNULL(u.is_shift_lead,0)=1
+            """,
+            (int(region_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_users_in_group(group_id: int) -> list:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM users WHERE group_id = ? AND approved = 1",
+            (int(group_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def list_shift_leads():
+
     """لیست مسئولان شیفت با مناطق تخصیص‌یافته."""
     with _conn() as con:
         rows = con.execute(

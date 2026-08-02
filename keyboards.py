@@ -23,6 +23,8 @@ BTN_ADD_PEOPLE = "➕ اضافه کردن افراد"
 BTN_ADD_CONTACT = BTN_ADD_PEOPLE  # سازگاری
 BTN_REGION_LEAVES = "📋 وضعیت مرخصی منطقه من"
 BTN_OVER_CAP_LEAVE = "➕ درخواست مرخصی اضافه بر ظرفیت"
+BTN_BROADCAST = "📢 پیام همگانی"
+BTN_RESET_BOT = "🔄 ریست ربات"
 
 def term_labels(term_region: str = "منطقه کاری", term_group: str = "گروه کاری") -> dict:
     """برچسب‌های منو/دکمه وابسته به واژهٔ منطقه و گروه."""
@@ -152,6 +154,8 @@ def admin_menu(also_shift_lead: bool = False, term_region: str = "منطقه ک�
         BTN_OVER_CAP_LEAVE,
         L["admin_calendar"],
         ADMIN_BTN_REPORT,
+        BTN_BROADCAST,
+        BTN_RESET_BOT,
         ADMIN_BTN_SETTINGS,
     ]
     if also_shift_lead:
@@ -287,7 +291,27 @@ def role_select_keyboard(callback_prefix: str, allowed_roles: list = None) -> In
     return kb
 
 
+def broadcast_options_keyboard(with_btn: bool = True) -> InlineKeyboardMarkup:
+    """فعال/غیرفعال بودن دکمه همراه پیام همگانی."""
+    kb = InlineKeyboardMarkup()
+    tick_on = "☑️" if with_btn else "☐"
+    tick_off = "☑️" if not with_btn else "☐"
+    kb.add(InlineKeyboardButton(text=f"{tick_on} ارسال با دکمه «ریست ربات»", callback_data="bcastopt:1"), row=1)
+    kb.add(InlineKeyboardButton(text=f"{tick_off} ارسال بدون دکمه", callback_data="bcastopt:0"), row=2)
+    kb.add(InlineKeyboardButton(text="✏️ ادامه و نوشتن موضوع", callback_data="bcastopt:go"), row=3)
+    return kb
+
+
+def succession_method_keyboard(purpose: str) -> InlineKeyboardMarkup:
+    """purpose: replace_admin | transfer_lead"""
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton(text="📱 انتخاب از دفترچه تلفن", callback_data=f"succvia:contact:{purpose}"), row=1)
+    kb.add(InlineKeyboardButton(text="🔗 ساخت لینک واگذاری", callback_data=f"succvia:link:{purpose}"), row=2)
+    return kb
+
+
 def add_people_method_keyboard() -> InlineKeyboardMarkup:
+
     """دو روش افزودن: لینک دعوت یا دفترچه تلفن."""
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton(text="🔗 لینک دعوت", callback_data="addvia:link"), row=1)
@@ -479,7 +503,7 @@ def pending_users_keyboard(users) -> InlineKeyboardMarkup:
 
 
 def all_users_keyboard(users, shift_mode: bool, letters: list = None) -> InlineKeyboardMarkup:
-    """یک دکمه برای هر نفر: نام (شیفت / منطقه / نقش)."""
+    """دکمه شیشه‌ای: نام | شیفت | منطقه | نقش"""
     kb = InlineKeyboardMarkup()
     if not users:
         return kb
@@ -487,36 +511,31 @@ def all_users_keyboard(users, shift_mode: bool, letters: list = None) -> InlineK
     row = 1
     for u in users:
         name = f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip() or str(u["user_id"])
-        # نقش
         if u.get("is_admin"):
             role = "مدیر"
         elif u.get("is_shift_lead"):
             role = "مسئول شیفت"
-        elif u.get("is_senior"):
+        elif u.get("is_senior") or u.get("role") == "snr":
             role = "ارشد"
         else:
             from config import ROLE_LABELS
             role = ROLE_LABELS.get(u.get("role"), u.get("role") or "عضو")
-        region = u.get("region_name") or u.get("group_name") or "-"
-        # اگر region_name نباشد از group_name استفاده می‌کنیم
-        if u.get("region_name"):
-            region = u["region_name"]
-        elif u.get("group_name"):
-            region = u["group_name"]
+        region = u.get("region_name") or "-"
+        group = u.get("group_name") or ""
+        si = u.get("shift_index")
+        if si is not None and letters and 0 <= int(si) < len(letters):
+            shift_part = f"شیفت {letters[int(si)]}"
+        elif si is not None:
+            shift_part = f"شیفت {si}"
         else:
-            region = "-"
-        shift_part = ""
-        if shift_mode:
-            si = u.get("shift_index")
-            if si is not None and 0 <= int(si) < len(letters):
-                shift_part = f"شیفت {letters[int(si)]}"
-            else:
-                shift_part = "شیفت؟"
-        parts = [p for p in (shift_part, region, role) if p]
-        label = f"👤 {name} ({' / '.join(parts)})"
-        # محدودیت طول دکمه
-        if len(label) > 60:
-            label = label[:57] + "…"
+            shift_part = "بدون شیفت"
+        # نام | شیفت | منطقه | گروه (نقش حذف شد — با گروه یکسان/زائد)
+        parts = [name, shift_part, region]
+        if group:
+            parts.append(group)
+        label = " | ".join(parts)
+        if len(label) > 64:
+            label = label[:61] + "…"
         kb.add(
             InlineKeyboardButton(text=label, callback_data=f"member_info:{u['user_id']}"),
             row=row,
