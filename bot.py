@@ -524,8 +524,33 @@ async def handle_contact_shared(message: Message, author, contact):
             logger.exception("notify new lead")
         return
 
+    # --- انتصاب مسئول شیفت از مخاطب ---
+    if purpose == "appoint_lead":
+        if not db_user.get("is_admin"):
+            await message.reply("فقط مدیر.")
+            return
+        if target_user is None:
+            await message.reply(
+                "مخاطب به حساب بله وصل نشد. از لینک دعوت یا لیست اعضا استفاده کنید.",
+                components=await menu_with_terms(db_user),
+            )
+            return
+        target_uid = target_user.id
+        await run_db(db.touch_user_bale_info, target_uid, getattr(target_user, "first_name", None) or shared_first, getattr(target_user, "username", None))
+        regions = await run_db(db.list_regions)
+        if not regions:
+            await message.reply("ابتدا منطقه بسازید.")
+            return
+        states.set_state(author.id, action="sl_pick_regions", target_uid=target_uid, selected=[], appointing=True)
+        await message.reply(
+            f"مناطق تحت مدیریت «{name or target_uid}» را انتخاب کنید:",
+            components=kb.multi_region_toggle_keyboard(regions, set(), "sl_tog"),
+        )
+        return
+
     # --- افزودن عضو ---
     can_add = bool(allowed_add_roles(db_user))
+
     if not can_add:
         await message.reply("شما اجازه‌ی افزودن عضو ندارید.")
         return
@@ -688,6 +713,13 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         return True
 
     if action == "replace_admin_uid":
+        states.clear_state(author.id)
+        await message.reply(
+            "دیگر شناسه پذیرفته نمی‌شود. از تنظیمات → جایگزینی مدیر با لینک یا مخاطب استفاده کنید.",
+            components=await menu_with_terms(await run_db(db.get_user, author.id)),
+        )
+        return True
+    if action == "replace_admin_uid_DISABLED":
         t = text.strip()
         if not t.isdigit():
             await message.reply("شناسه باید عدد باشد. دوباره وارد کنید:")
@@ -705,6 +737,13 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         return True
 
     if action == "transfer_shift_lead_uid":
+        states.clear_state(author.id)
+        await message.reply(
+            "دیگر شناسه پذیرفته نمی‌شود. از دکمه انتقال نقش با لینک یا مخاطب استفاده کنید.",
+            components=await menu_with_terms(await run_db(db.get_user, author.id)),
+        )
+        return True
+    if action == "transfer_shift_lead_uid_DISABLED":
         t = text.strip()
         if not t.isdigit():
             await message.reply("شناسه باید عدد باشد. دوباره وارد کنید:")
@@ -857,26 +896,11 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         return True
 
     if action == "appoint_sl_uid":
-        t = text.strip()
-        if not t.isdigit():
-            await message.reply("شناسه عددی وارد کنید:")
-            return True
-        target = int(t)
-        regions = await run_db(db.list_regions)
-        if not regions:
-            await message.reply("ابتدا منطقه بسازید.")
-            states.clear_state(author.id)
-            return True
-        states.set_state(
-            author.id,
-            action="sl_pick_regions",
-            target_uid=target,
-            selected=[],
-            appointing=True,
-        )
+        states.clear_state(author.id)
         await message.reply(
-            "مناطق تحت مدیریت این مسئول شیفت را انتخاب کنید:",
-            components=kb.multi_region_toggle_keyboard(regions, set(), "sl_tog"),
+            "دیگر شناسه پذیرفته نمی‌شود.\n"
+            "از تنظیمات → مسئولان شیفت → انتصاب جدید، لینک، مخاطب یا لیست اعضا را استفاده کنید.",
+            components=await menu_with_terms(await run_db(db.get_user, author.id)),
         )
         return True
 
@@ -1502,12 +1526,8 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
 
     if text == kb.LEAD_BTN_TRANSFER:
         await message.reply(
-            "واگذاری نقش مسئول شیفت — روش را انتخاب کنید:",
+            "واگذاری نقش مسئول شیفت — فقط با لینک یا دفترچه تلفن (بدون شناسه):",
             components=kb.succession_method_keyboard("transfer_lead"),
-        )
-        await message.reply(
-            "شناسه عددی (user_id) کاربر جایگزین را وارد کنید.\n"
-            "پس از انتقال، شما دیگر مسئول شیفت نخواهید بود."
         )
         return
 
@@ -2626,13 +2646,10 @@ async def on_callback(callback: CallbackQuery):
                 kb.shift_leads_manage_keyboard(leads),
             )
         elif data == "settings_replaceadmin":
-            await callback.message.reply(
-                "جایگزینی مدیر — روش را انتخاب کنید:",
-                components=kb.succession_method_keyboard("replace_admin"),
-            )
-            await callback.message.reply(
-                "شناسه عددی (user_id) کاربر جانشین مدیر را وارد کنید.\n"
-                "پس از تأیید، شما دیگر مدیر نخواهید بود و او مدیر می‌شود."
+            await _ui_reply(
+                callback,
+                "جایگزینی مدیر — فقط با لینک یا دفترچه تلفن (بدون شناسه):",
+                kb.succession_method_keyboard("replace_admin"),
             )
         elif data == "settings_max_leads":
             states.set_state(callback.user.id, action="set_max_shift_leads")
@@ -2664,9 +2681,30 @@ async def on_callback(callback: CallbackQuery):
             _, gid, color = data.split(":", 2)
             await run_db(db.update_group_color, int(gid), color)
             await callback.message.reply(f"✅ رنگ گروه به {color} تغییر کرد.")
+        elif data.startswith("appoint_sl_pick:"):
+            target = int(data.split(":")[1])
+            regions = await run_db(db.list_regions)
+            if not regions:
+                await _ui_reply(callback, "ابتدا منطقه بسازید.")
+            else:
+                states.set_state(
+                    callback.user.id,
+                    action="sl_pick_regions",
+                    target_uid=target,
+                    selected=[],
+                    appointing=True,
+                )
+                await _ui_reply(
+                    callback,
+                    "مناطق تحت مدیریت این مسئول شیفت را انتخاب کنید:",
+                    kb.multi_region_toggle_keyboard(regions, set(), "sl_tog"),
+                )
         elif data == "sl_appoint":
-            states.set_state(callback.user.id, action="appoint_sl_uid")
-            await callback.message.reply("user_id کاربر برای انتصاب مسئول شیفت را وارد کنید:")
+            await _ui_reply(
+                callback,
+                "انتصاب مسئول شیفت جدید — روش را انتخاب کنید (بدون وارد کردن شناسه):",
+                kb.succession_method_keyboard("appoint_lead"),
+            )
         elif data.startswith("sl_info:"):
             uid = int(data.split(":")[1])
             await callback.message.reply(
@@ -3221,11 +3259,27 @@ async def cb_succvia(callback: CallbackQuery, data: str):
         return
     method, purpose = parts[1], parts[2]
     viewer = await run_db(db.get_user, callback.user.id)
-    if purpose == "replace_admin" and not (viewer and viewer.get("is_admin")):
+    if purpose in ("replace_admin", "appoint_lead") and not (viewer and viewer.get("is_admin")):
         await _ui_reply(callback, "فقط مدیر.")
         return
     if purpose == "transfer_lead" and not (viewer and viewer.get("is_shift_lead")):
         await _ui_reply(callback, "فقط مسئول شیفت.")
+        return
+    if method == "list" and purpose == "appoint_lead":
+        users = await run_db(db.list_all_active_users) or []
+        # فقط کسانی که هنوز مسئول شیفت نیستند
+        users = [u for u in users if not u.get("is_shift_lead")]
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+        if not users:
+            await _ui_reply(callback, "عضو تاییدشده‌ای برای انتصاب نیست.")
+            return
+        await _ui_reply(
+            callback,
+            "عضو را از لیست انتخاب کنید:",
+            kb.pick_member_keyboard(users, letters, "appoint_sl_pick"),
+        )
         return
     if method == "contact":
         states.set_state(callback.user.id, action="awaiting_contact", purpose=purpose)
@@ -3236,6 +3290,23 @@ async def cb_succvia(callback: CallbackQuery, data: str):
         return
     if method == "link":
         token = secrets.token_urlsafe(8)
+        if purpose == "appoint_lead":
+            await run_db(
+                db.create_invite, token, "lead", None, callback.user.id,
+                None, 0, None, 1, [],
+            )
+            await run_db(db.set_setting, f"invite_purpose_{token}", "appoint_lead")
+            try:
+                me = await client.get_me()
+                uname = getattr(me, "username", None) or "BOT"
+                link = f"https://ble.ir/{uname}?start={token}"
+            except Exception:
+                link = f"/start {token}"
+            await _ui_reply(
+                callback,
+                f"🔗 لینک دعوت مسئول شیفت:\n{link}\n\nپس از عضویت، مناطق را از تنظیمات مسئولان شیفت تخصیص دهید.",
+            )
+            return
         if purpose == "transfer_lead":
             rids = await run_db(db.list_shift_lead_region_ids, callback.user.id) or []
             await run_db(

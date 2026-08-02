@@ -303,10 +303,16 @@ def broadcast_options_keyboard(with_btn: bool = True) -> InlineKeyboardMarkup:
 
 
 def succession_method_keyboard(purpose: str) -> InlineKeyboardMarkup:
-    """purpose: replace_admin | transfer_lead"""
+    """purpose: replace_admin | transfer_lead | appoint_lead"""
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton(text="📱 انتخاب از دفترچه تلفن", callback_data=f"succvia:contact:{purpose}"), row=1)
-    kb.add(InlineKeyboardButton(text="🔗 ساخت لینک واگذاری", callback_data=f"succvia:link:{purpose}"), row=2)
+    if purpose == "appoint_lead":
+        kb.add(InlineKeyboardButton(text="👥 انتخاب از لیست اعضا", callback_data=f"succvia:list:{purpose}"), row=2)
+        kb.add(InlineKeyboardButton(text="🔗 ساخت لینک دعوت مسئول شیفت", callback_data=f"succvia:link:{purpose}"), row=3)
+    else:
+        kb.add(InlineKeyboardButton(text="🔗 ساخت لینک واگذاری", callback_data=f"succvia:link:{purpose}"), row=2)
+    kb.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data="nav_back_admin"), row=4)
+    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=5)
     return kb
 
 
@@ -367,6 +373,10 @@ def multi_region_toggle_keyboard(regions, selected_ids: set, callback_prefix: st
         )
     row = _add_two_col(kb, buttons)
     kb.add(InlineKeyboardButton(text="✔️ تأیید مناطق انتخاب‌شده", callback_data=done_callback), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data="nav_back_admin"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=row)
     return kb
 
 
@@ -471,6 +481,10 @@ def regions_manage_keyboard(regions) -> InlineKeyboardMarkup:
     ]
     row = _add_two_col(kb, buttons)
     kb.add(InlineKeyboardButton(text="➕ ساخت منطقه جدید", callback_data="region_new"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data="nav_back_admin"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=row)
     return kb
 
 
@@ -487,6 +501,8 @@ def region_actions_keyboard(region_id: int, max_seniors_label: str = "") -> Inli
         InlineKeyboardButton(text="📅 تقویم", callback_data=f"cal_region:{region_id}"),
     ]
     _add_two_col(kb, buttons)
+    kb.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data="settings_regions"), row=20)
+    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=21)
     return kb
 
 
@@ -499,6 +515,30 @@ def pending_users_keyboard(users) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=f"✅ تایید {name}{pnum}", callback_data=f"approve:{u['user_id']}"),
             row=i,
         )
+    return kb
+
+
+def pick_member_keyboard(users, letters: list = None, prefix: str = "appoint_sl_pick") -> InlineKeyboardMarkup:
+    """انتخاب عضو از لیست (بدون user_id دستی)."""
+    kb = InlineKeyboardMarkup()
+    letters = letters or []
+    row = 1
+    for u in users:
+        name = f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip() or str(u["user_id"])
+        region = u.get("region_name") or "-"
+        si = u.get("shift_index")
+        if si is not None and letters and 0 <= int(si) < len(letters):
+            shift_part = f"شیفت {letters[int(si)]}"
+        else:
+            shift_part = "—"
+        label = f"{name} | {shift_part} | {region}"
+        if len(label) > 60:
+            label = label[:57] + "…"
+        kb.add(InlineKeyboardButton(text=label, callback_data=f"{prefix}:{u['user_id']}"), row=row)
+        row += 1
+    kb.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data="sl_appoint"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=row)
     return kb
 
 
@@ -708,6 +748,10 @@ def shift_leads_manage_keyboard(leads: list) -> InlineKeyboardMarkup:
         )
         row += 1
     kb.add(InlineKeyboardButton(text="➕ انتصاب مسئول شیفت جدید", callback_data="sl_appoint"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data="nav_back_admin"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=row)
     return kb
 
 
@@ -719,6 +763,10 @@ def shift_lead_actions_keyboard(user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🗑 عزل", callback_data=f"sl_remove:{user_id}"),
     ]
     _add_two_col(kb, buttons)
+    row = 10
+    kb.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data="settings_shiftleads"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=row)
     return kb
 
 
