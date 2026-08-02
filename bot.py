@@ -192,7 +192,7 @@ async def on_message(message: Message):
         if text == cancel_txt:
             states.clear_state(author.id)
             db_user = await run_db(db.get_user, author.id)
-            await message.reply("لغو شد.", components=kb.menu_for_user(db_user))
+            await message.reply("لغو شد.", components=await menu_with_terms(db_user))
             return
         # اگر کاربر دکمه منوی اصلی زد، از حالت مخاطب خارج شو
         states.clear_state(author.id)
@@ -259,7 +259,7 @@ async def handle_start(message: Message, author, text: str):
 
 async def show_returning_menu(message: Message, db_user: dict):
     name = display_name(db_user)
-    menu = kb.menu_for_user(db_user)
+    menu = await menu_with_terms(db_user)
     if db_user.get("is_admin"):
         await message.reply(f"سلام {name}! به پنل مدیریت خوش برگشتید.", components=menu)
     elif not db_user.get("approved"):
@@ -386,7 +386,7 @@ async def finalize_registration(message: Message, author, token):
             await message.reply(
                 f"✅ ثبت‌نام شما تکمیل و عضویتتان تایید شد.\nنقش: {role_label}{shift_txt}\n"
                 f"{term_r}: {region['name'] if region else '-'}\n{term_g}: {group['name'] if group else '-'}",
-                components=kb.menu_for_user(db_user) if db_user else kb.user_menu(),
+                components=await menu_with_terms(db_user) if db_user else kb.user_menu(),
             )
             return
         if invite:
@@ -439,16 +439,16 @@ async def handle_contact_shared(message: Message, author, contact):
         existing = await run_db(db.get_user, target_uid)
 
         if existing and existing.get("is_admin"):
-            await message.reply("این شخص از قبل مدیر ربات است.", components=kb.menu_for_user(db_user))
+            await message.reply("این شخص از قبل مدیر ربات است.", components=await menu_with_terms(db_user))
             return
         if existing and existing.get("approved"):
             await message.reply(
                 f"«{name or display_name(existing)}» از قبل عضو تایید‌شده‌ی ربات است.",
-                components=kb.menu_for_user(db_user),
+                components=await menu_with_terms(db_user),
             )
             return
 
-        await message.reply("✅ دریافت شد؛ این شخص کاربر بله است.", components=kb.menu_for_user(db_user))
+        await message.reply("✅ دریافت شد؛ این شخص کاربر بله است.", components=await menu_with_terms(db_user))
         await message.reply(
             f"نقش «{name or target_uid}» را انتخاب کنید:",
             components=kb.role_select_keyboard(f"setrole:{target_uid}", allowed_roles=allowed_add_roles(db_user)),
@@ -458,7 +458,7 @@ async def handle_contact_shared(message: Message, author, contact):
     # شماره به کاربر بله شناخته‌شده‌ای وصل نشد (یا حریم خصوصی مانع شد) → لینک دعوت جایگزین
     await message.reply(
         "✅ دریافت شد؛ این شماره را نتوانستیم به یک حساب بله متصل کنیم "
-        "(یا حریم خصوصی‌اش اجازه نمی‌دهد).", components=kb.menu_for_user(db_user),
+        "(یا حریم خصوصی‌اش اجازه نمی‌دهد).", components=await menu_with_terms(db_user),
     )
     phone = getattr(contact, "phone_number", None) or "؟"
     await message.reply(
@@ -542,7 +542,7 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         capacity = int(text.strip())
         await run_db(db.update_group_capacity, state["group_id"], capacity)
         states.clear_state(author.id)
-        await message.reply("✅ ظرفیت گروه به‌روزرسانی شد.", components=kb.admin_menu())
+        await message.reply("✅ ظرفیت گروه به‌روزرسانی شد.", components=await menu_with_terms(await run_db(db.get_user, author.id)))
         return True
 
     if action == "cfg_shift_count":
@@ -660,7 +660,7 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
             # fallback مستقیم
             await run_db(db.set_setting, "term_region", name)
         states.clear_state(author.id)
-        await message.reply(f"✅ عنوان منطقه کاری: «{name}»", components=kb.admin_menu())
+        await message.reply(f"✅ عنوان منطقه کاری: «{name}»", components=await menu_with_terms(await run_db(db.get_user, author.id)))
         return True
 
     if action == "set_term_group":
@@ -673,7 +673,7 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         except Exception:
             await run_db(db.set_setting, "term_group", name)
         states.clear_state(author.id)
-        await message.reply(f"✅ عنوان گروه کاری: «{name}»", components=kb.admin_menu())
+        await message.reply(f"✅ عنوان گروه کاری: «{name}»", components=await menu_with_terms(await run_db(db.get_user, author.id)))
         return True
 
     if action == "set_max_shift_leads":
@@ -726,7 +726,7 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         states.clear_state(author.id)
         await message.reply(
             f"✅ سقف تکنسین ارشد در هر منطقه: {t} نفر",
-            components=kb.admin_menu(),
+            components=await menu_with_terms(await run_db(db.get_user, author.id)),
         )
         return True
 
@@ -739,7 +739,7 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         states.clear_state(author.id)
         await message.reply(
             f"✅ ظرفیت مرخصی هم‌زمان ارشد در هر شیفت: {t}",
-            components=kb.admin_menu(),
+            components=await menu_with_terms(await run_db(db.get_user, author.id)),
         )
         return True
 
@@ -754,7 +754,7 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         await run_db(db.set_region_max_seniors, rid, None if n == 0 else n)
         states.clear_state(author.id)
         cur = await run_db(db.get_region_max_seniors, rid)
-        await message.reply(f"✅ سقف ارشد این منطقه: {cur} نفر", components=kb.admin_menu())
+        await message.reply(f"✅ سقف ارشد این منطقه: {cur} نفر", components=await menu_with_terms(await run_db(db.get_user, author.id)))
         return True
 
     if action == "appoint_sl_uid":
@@ -862,11 +862,11 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         if status == "exists":
             await message.reply(
                 "برای این روز از قبل مرخصی فعال دارید.",
-                components=kb.menu_for_user(db_user),
+                components=await menu_with_terms(db_user),
             )
             return True
         if status != "created":
-            await message.reply("ثبت انجام نشد.", components=kb.menu_for_user(db_user))
+            await message.reply("ثبت انجام نشد.", components=await menu_with_terms(db_user))
             return True
         lid = extra
         # اطلاع به مافوق با برچسب اضافه بر ظرفیت
@@ -874,7 +874,7 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         await message.reply(
             f"📝 درخواست مرخصی اضافه بر ظرفیت برای {jalali.format_jalali(date_str)} ثبت شد "
             "و برای مافوق ارسال شد.",
-            components=kb.menu_for_user(db_user),
+            components=await menu_with_terms(db_user),
         )
         return True
 
@@ -1029,7 +1029,8 @@ async def show_region_leaves_status(message: Message, db_user: dict):
 
 
 async def handle_admin_menu(message: Message, author, text: str):
-    if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
+    tr, tg, L = await _terms()
+    if text in (L["region_leaves"], getattr(kb, "BTN_REGION_LEAVES", "")):
         db_user = await run_db(db.get_user, author.id)
         await show_region_leaves_status(message, db_user)
         return
@@ -1084,7 +1085,7 @@ async def handle_admin_menu(message: Message, author, text: str):
         return
 
 
-    if text == kb.ADMIN_BTN_CALENDAR:
+    if text in (L["admin_calendar"], kb.ADMIN_BTN_CALENDAR):
         regions = await run_db(db.list_regions)
         if not regions:
             await message.reply("هنوز منطقه‌ای تعریف نشده.")
@@ -1107,12 +1108,14 @@ async def handle_admin_menu(message: Message, author, text: str):
         await message.reply(
             "⚙️ تنظیمات ربات",
             components=kb.settings_keyboard(
-                mode, is_admin=True, shift_count=cfg["shift_count"] if cfg else None
+                mode, is_admin=True, shift_count=cfg["shift_count"] if cfg else None,
+                term_region=tr if "tr" in dir() else "منطقه کاری",
+                term_group=tg if "tg" in dir() else "گروه کاری",
             ),
         )
         return
 
-    await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=kb.admin_menu())
+    await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=await menu_with_terms(await run_db(db.get_user, author.id)))
 
 
 
@@ -1168,11 +1171,14 @@ async def send_leaves_report_pdf(message: Message, rows: list, *, title: str, le
             item["leave_date_fa"] = str(r.get("leave_date") or "-")
         prepared.append(item)
     try:
+        tr, tg, _ = await _terms()
         pdf_bytes = await run_db(
             report_pdf.build_leaves_pdf,
             prepared,
             letters=letters,
             title=title,
+            term_region=tr,
+            term_group=tg,
         )
         from bale import InputFile
         from datetime import datetime
@@ -1194,7 +1200,8 @@ async def send_leaves_report_pdf(message: Message, rows: list, *, title: str, le
 async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: str):
     region_ids = await run_db(db.list_shift_lead_region_ids, author.id)
 
-    if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
+    tr, tg, L = await _terms()
+    if text in (L["region_leaves"], getattr(kb, "BTN_REGION_LEAVES", "")):
         await show_region_leaves_status(message, db_user)
         return
 
@@ -1218,7 +1225,7 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
             await message.reply("صف مرخصی ارشدهای مناطق شما خالی است.")
         return
 
-    if text == kb.LEAD_BTN_GROUPS:
+    if text in ((await _terms())[2]["lead_groups"], kb.LEAD_BTN_GROUPS):
         lines = []
         all_groups = []
         for rid in region_ids:
@@ -1277,7 +1284,7 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
         )
         return
 
-    if text == kb.LEAD_BTN_CALENDAR:
+    if text in (L["lead_calendar"], kb.LEAD_BTN_CALENDAR):
         regions = []
         for rid in region_ids:
             r = await run_db(db.get_region, rid)
@@ -1292,7 +1299,7 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
         )
         return
 
-    if text == kb.LEAD_BTN_REPORT:
+    if text in (L["lead_report"], kb.LEAD_BTN_REPORT):
         await start_monthly_report_picker(message, db_user)
         return
 
@@ -1320,7 +1327,7 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
         )
         return
 
-    if text == kb.LEAD_BTN_SETTINGS:
+    if text in (L["lead_settings"], kb.LEAD_BTN_SETTINGS):
         await message.reply(
             "تنظیمات عملیاتی مناطق شما:",
             components=kb.lead_settings_keyboard(),
@@ -1335,11 +1342,12 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
 # ==========================================================================
 
 async def handle_senior_menu(message: Message, author, db_user: dict, text: str):
-    if text == getattr(kb, "SNR_BTN_REPORT", "📊 گزارش مرخصی منطقه"):
+    tr, tg, L = await _terms()
+    if text in (L.get("snr_report", ""), getattr(kb, "SNR_BTN_REPORT", "")):
         await start_monthly_report_picker(message, db_user)
         return
 
-    if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
+    if text in (L["region_leaves"], getattr(kb, "BTN_REGION_LEAVES", "")):
         await show_region_leaves_status(message, db_user)
         return
 
@@ -1350,7 +1358,7 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
 
     region_id = db_user.get("region_id")
 
-    if text == kb.SNR_BTN_QUEUE:
+    if text in (L["snr_queue"], kb.SNR_BTN_QUEUE):
         if not region_id:
             await message.reply("منطقه کاری شما مشخص نیست.")
             return
@@ -1364,7 +1372,7 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
             await message.reply(txt, components=kb.leave_decision_keyboard(r["id"], r["status"]))
         return
 
-    if text == kb.SNR_BTN_MEMBERS:
+    if text in (L["snr_members"], kb.SNR_BTN_MEMBERS):
         if not region_id:
             await message.reply("منطقه کاری شما مشخص نیست.")
             return
@@ -1414,7 +1422,7 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
         )
         return
 
-    if text == kb.SNR_BTN_GROUPS:
+    if text in (L["snr_groups"], kb.SNR_BTN_GROUPS):
         if not region_id:
             await message.reply("منطقه کاری شما مشخص نیست.")
             return
@@ -1426,7 +1434,7 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
         await message.reply("گروه‌های منطقه:\n" + "\n".join(lines))
         return
 
-    if text == kb.SNR_BTN_CALENDAR:
+    if text in (L["snr_calendar"], kb.SNR_BTN_CALENDAR):
         await show_calendar(message, db_user)
         return
 
@@ -1668,7 +1676,8 @@ async def notify_admins_leave_cancelled(db_user: dict, dates):
 # ==========================================================================
 
 async def handle_user_menu(message: Message, author, db_user: dict, text: str):
-    if text == getattr(kb, "BTN_REGION_LEAVES", "📋 وضعیت مرخصی منطقه من"):
+    tr, tg, L = await _terms()
+    if text in (L["region_leaves"], getattr(kb, "BTN_REGION_LEAVES", "")):
         await show_region_leaves_status(message, db_user)
         return
     if text == getattr(kb, "BTN_OVER_CAP_LEAVE", "➕ درخواست مرخصی اضافه بر ظرفیت"):
@@ -1852,6 +1861,19 @@ async def _term_group() -> str:
         return await run_db(db.get_term_group)
     except Exception:
         return "گروه کاری"
+
+
+async def menu_with_terms(db_user: dict):
+    tr, tg, _ = await _terms()
+    return await menu_with_terms(db_user, tr, tg)
+
+
+async def _terms():
+
+    """(term_region, term_group, labels_dict)"""
+    tr = await _term_region()
+    tg = await _term_group()
+    return tr, tg, kb.term_labels(tr, tg)
 
 async def _ui_reply(callback: CallbackQuery, text: str, components=None):
     """همیشه پاسخ بده — اول edit، اگر نشد reply."""
@@ -3292,7 +3314,7 @@ async def cb_aprvlead_done(callback: CallbackQuery, data: str):
         await client.send_message(
             uid,
             f"✅ شما به‌عنوان مسئول شیفت تایید شدید.{shift_txt}\nمناطق: {', '.join(names)}",
-            components=kb.menu_for_user(u) if u else kb.shift_lead_menu(),
+            components=await menu_with_terms(u) if u else kb.shift_lead_menu(),
         )
     except Exception:
         logger.exception("notify lead approve failed")
@@ -3335,7 +3357,7 @@ async def finalize_approve(callback: CallbackQuery, user_id: int, role, group_id
         await client.send_message(
             user_id,
             f"✅ شما توسط مدیر تایید شدید.\nنقش: {role_label}{shift_txt}\nمنطقه: {region_name}\nگروه: {group_name}",
-            components=kb.menu_for_user(approved_user) if approved_user else kb.user_menu(),
+            components=await menu_with_terms(approved_user) if approved_user else kb.user_menu(),
         )
     except Exception:
         logger.exception("خطا در اطلاع‌رسانی تایید به کاربر %s", user_id)
@@ -3405,7 +3427,7 @@ async def cb_nav_main(callback: CallbackQuery):
     """بازگشت به منوی اصلی نقش کاربر."""
     states.clear_state(callback.user.id)
     db_user = await run_db(db.get_user, callback.user.id)
-    await _ui_reply(callback, "🏠 منوی اصلی", kb.menu_for_user(db_user))
+    await _ui_reply(callback, "🏠 منوی اصلی", await menu_with_terms(db_user))
 
 
 async def open_admin_settings(callback: CallbackQuery):

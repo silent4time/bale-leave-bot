@@ -24,6 +24,39 @@ BTN_ADD_CONTACT = BTN_ADD_PEOPLE  # سازگاری
 BTN_REGION_LEAVES = "📋 وضعیت مرخصی منطقه من"
 BTN_OVER_CAP_LEAVE = "➕ درخواست مرخصی اضافه بر ظرفیت"
 
+def term_labels(term_region: str = "منطقه کاری", term_group: str = "گروه کاری") -> dict:
+    """برچسب‌های منو/دکمه وابسته به واژهٔ منطقه و گروه."""
+    tr = term_region or "منطقه کاری"
+    tg = term_group or "گروه کاری"
+    return {
+        "region_leaves": f"📋 وضعیت مرخصی {tr} من",
+        "admin_groups": f"📋 {tg}‌ها",
+        "admin_calendar": f"📅 نمایش تقویم {tr}",
+        "lead_groups": f"📋 {tg}‌های {tr} من",
+        "lead_calendar": f"📅 نمایش تقویم {tr}",
+        "lead_report": f"📊 گزارش {tr} من",
+        "lead_settings": f"⚙️ تنظیمات {tr} من",
+        "snr_queue": f"🕓 صف مرخصی اعضای {tr}",
+        "snr_members": f"👥 اعضای {tr} من",
+        "snr_groups": f"📋 {tg}‌های {tr} من",
+        "snr_calendar": f"📅 تقویم {tr} من",
+        "snr_report": f"📊 گزارش مرخصی {tr}",
+        "settings_regions": f"🗺 مدیریت {tr} و {tg}",
+        "settings_colors": f"🎨 رنگ {tg}‌ها",
+        "settings_terms": f"🏷 واژه‌های {tr}/{tg}",
+        "no_region": f"بدون {tr}",
+        "no_group": f"بدون {tg}",
+        "region_new": f"➕ ساخت {tr} جدید",
+        "region_groups": f"📋 {tg}‌های این {tr}",
+        "region_addgroup": f"➕ ساخت {tg} در این {tr}",
+        "member_chgrp": f"📋 تغییر {tg}",
+        "member_chreg": f"🗺 تغییر {tr}",
+        "lead_cfg_groups": f"📋 مدیریت {tg}‌ها",
+    }
+
+
+
+
 # --- مدیر ---
 # صف مرخصی در نقش «فقط مدیر» نیست.
 # اگر مدیر هم‌زمان مسئول شیفت باشد، دکمه صف مسئول شیفت به منویش اضافه می‌شود.
@@ -107,60 +140,62 @@ def _add_menu_two_col(kb: MenuKeyboardMarkup, labels: list) -> None:
         row += 1
 
 
-def admin_menu(also_shift_lead: bool = False) -> MenuKeyboardMarkup:
-    """منوی مدیر. صف مرخصی فقط اگر هم‌زمان مسئول شیفت باشد.
-    آیتم‌های «ساخت/پیکربندی» (مناطق، گروه‌ها، مسئولان شیفت، جایگزینی مدیر)
-    از این منو حذف شده و داخل «⚙️ تنظیمات» جمع شده‌اند."""
+def admin_menu(also_shift_lead: bool = False, term_region: str = "منطقه کاری", term_group: str = "گروه کاری") -> MenuKeyboardMarkup:
+    """منوی مدیر."""
+    L = term_labels(term_region, term_group)
     kb = MenuKeyboardMarkup()
     labels = [
         ADMIN_BTN_PENDING,
         ADMIN_BTN_MEMBERS,
         BTN_ADD_PEOPLE,
-        BTN_REGION_LEAVES,
+        L["region_leaves"],
         BTN_OVER_CAP_LEAVE,
-        ADMIN_BTN_CALENDAR,
+        L["admin_calendar"],
         ADMIN_BTN_REPORT,
         ADMIN_BTN_SETTINGS,
     ]
     if also_shift_lead:
-        # صف مرخصی در نقش مسئول شیفت — نه به‌عنوان مدیر
         labels.insert(1, LEAD_BTN_QUEUE)
         labels.extend([LEAD_BTN_MY_SHIFT, LEAD_BTN_TRANSFER])
     _add_menu_two_col(kb, labels)
     return kb
 
 
-def shift_lead_menu() -> MenuKeyboardMarkup:
+
+def shift_lead_menu(term_region: str = "منطقه کاری", term_group: str = "گروه کاری") -> MenuKeyboardMarkup:
+    L = term_labels(term_region, term_group)
     labels = [
         LEAD_BTN_QUEUE,
-        LEAD_BTN_GROUPS,
+        L["lead_groups"],
         LEAD_BTN_MEMBERS,
         LEAD_BTN_PENDING,
         BTN_ADD_PEOPLE,
-        BTN_REGION_LEAVES,
+        L["region_leaves"],
         BTN_OVER_CAP_LEAVE,
-        LEAD_BTN_CALENDAR,
-        LEAD_BTN_REPORT,
+        L["lead_calendar"],
+        L["lead_report"],
         LEAD_BTN_MY_SHIFT,
         LEAD_BTN_TRANSFER,
-        LEAD_BTN_SETTINGS,
+        L["lead_settings"],
     ]
     kb = MenuKeyboardMarkup()
     _add_menu_two_col(kb, labels)
     return kb
 
 
-def senior_menu() -> MenuKeyboardMarkup:
+
+def senior_menu(term_region: str = "منطقه کاری", term_group: str = "گروه کاری") -> MenuKeyboardMarkup:
+    L = term_labels(term_region, term_group)
     labels = [
-        SNR_BTN_QUEUE,
-        SNR_BTN_MEMBERS,
+        L["snr_queue"],
+        L["snr_members"],
         SNR_BTN_PENDING,
         BTN_ADD_PEOPLE,
-        BTN_REGION_LEAVES,
+        L["region_leaves"],
         BTN_OVER_CAP_LEAVE,
-        SNR_BTN_GROUPS,
-        SNR_BTN_CALENDAR,
-        SNR_BTN_REPORT,
+        L["snr_groups"],
+        L["snr_calendar"],
+        L["snr_report"],
         SNR_BTN_STATUS,
     ]
     kb = MenuKeyboardMarkup()
@@ -168,13 +203,13 @@ def senior_menu() -> MenuKeyboardMarkup:
     return kb
 
 
-def user_menu() -> MenuKeyboardMarkup:
+
+def user_menu(term_region: str = "منطقه کاری", term_group: str = "گروه کاری") -> MenuKeyboardMarkup:
+    L = term_labels(term_region, term_group)
     kb = MenuKeyboardMarkup()
-    _add_menu_two_col(kb, [USER_BTN_CALENDAR, BTN_REGION_LEAVES, BTN_OVER_CAP_LEAVE, USER_BTN_STATUS])
+    _add_menu_two_col(kb, [USER_BTN_CALENDAR, L["region_leaves"], BTN_OVER_CAP_LEAVE, USER_BTN_STATUS])
     return kb
 
-
-CONTACT_CANCEL_TEXT = "❌ انصراف از افزودن مخاطب"
 
 
 def contact_request_menu() -> MenuKeyboardMarkup:
@@ -185,19 +220,21 @@ def contact_request_menu() -> MenuKeyboardMarkup:
     return kb
 
 
-def menu_for_user(db_user: dict) -> MenuKeyboardMarkup:
+def menu_for_user(db_user: dict, term_region: str = "منطقه کاری", term_group: str = "گروه کاری") -> MenuKeyboardMarkup:
     """انتخاب منوی مناسب (اولویت: مدیر > مسئول شیفت > ارشد > عضو)."""
     if db_user.get("is_admin"):
-        return admin_menu(also_shift_lead=bool(db_user.get("is_shift_lead")))
+        return admin_menu(
+            also_shift_lead=bool(db_user.get("is_shift_lead")),
+            term_region=term_region,
+            term_group=term_group,
+        )
     if db_user.get("is_shift_lead"):
-        return shift_lead_menu()
-    # is_senior یا نقش snr هر دو منوی ارشد می‌گیرند
+        return shift_lead_menu(term_region, term_group)
     if db_user.get("is_senior") or db_user.get("role") == "snr":
-        return senior_menu()
-    return user_menu()
+        return senior_menu(term_region, term_group)
+    return user_menu(term_region, term_group)
 
 
-# ============================================================== کمک‌کننده ====
 
 def _add_two_col(kb: InlineKeyboardMarkup, buttons: list, start_row: int = 1) -> int:
     """
@@ -266,7 +303,7 @@ def region_select_keyboard(regions, callback_prefix: str, allow_none: bool = Fal
     ]
     if allow_none:
         buttons.append(
-            InlineKeyboardButton(text="بدون منطقه", callback_data=f"{callback_prefix}:none")
+            InlineKeyboardButton(text="بدون منطقه", callback_data=f"{callback_prefix}:none")  # override via caller if needed
         )
     _add_two_col(kb, buttons)
     return kb
@@ -564,9 +601,12 @@ def batch_day_decision_keyboard(items: list) -> InlineKeyboardMarkup:
     return kb
 
 
-def settings_keyboard(current_mode: str, *, is_admin: bool = True, shift_count: int = None) -> InlineKeyboardMarkup:
+def settings_keyboard(current_mode: str, *, is_admin: bool = True, shift_count: int = None,
+                     term_region: str = "منطقه کاری", term_group: str = "گروه کاری") -> InlineKeyboardMarkup:
     """منوی تنظیمات مدیر — مدیریت شیفت‌ها فقط از یک دکمه."""
     kb = InlineKeyboardMarkup()
+    L = term_labels(term_region, term_group)
+
     row = 1
     if not is_admin:
         return kb
@@ -600,7 +640,7 @@ def settings_keyboard(current_mode: str, *, is_admin: bool = True, shift_count: 
             row=row,
         )
         row += 1
-    kb.add(InlineKeyboardButton(text="🗺 مدیریت مناطق و گروه‌ها", callback_data="settings_regions"), row=row)
+    kb.add(InlineKeyboardButton(text=L["settings_regions"], callback_data="settings_regions"), row=row)
     row += 1
     kb.add(InlineKeyboardButton(text="👔 لیست همهٔ مسئولان شیفت", callback_data="settings_shiftleads"), row=row)
     row += 1
@@ -613,9 +653,9 @@ def settings_keyboard(current_mode: str, *, is_admin: bool = True, shift_count: 
     kb.add(
         InlineKeyboardButton(text="📅 ظرفیت مرخصی هم‌زمان ارشد در هر شیفت", callback_data="settings_max_snr_leave"), row=row)
     row += 1
-    kb.add(InlineKeyboardButton(text="🎨 رنگ گروه‌ها", callback_data="settings_colors"), row=row)
+    kb.add(InlineKeyboardButton(text=L["settings_colors"], callback_data="settings_colors"), row=row)
     row += 1
-    kb.add(InlineKeyboardButton(text="🏷 واژه‌های منطقه/گروه", callback_data="settings_terms"), row=row)
+    kb.add(InlineKeyboardButton(text=L["settings_terms"], callback_data="settings_terms"), row=row)
     row += 1
     kb.add(InlineKeyboardButton(text="🔁 جایگزینی مدیر", callback_data="settings_replaceadmin"), row=row)
     return kb

@@ -86,6 +86,8 @@ def build_leaves_pdf(
     letters: Optional[list] = None,
     title: str = "گزارش مرخصی‌های فعال",
     subtitle: str = "",
+    term_region: str = "منطقه",
+    term_group: str = "گروه",
 ) -> bytes:
     """
     rows: لیست دیکشنری با کلیدهای first_name/last_name/shift_index/
@@ -157,7 +159,7 @@ def build_leaves_pdf(
     story.append(Spacer(1, 4 * mm))
 
     # ترتیب منطقی (از راست به چپ در خروجی)
-    headers_rtl = ["نوع", "وضعیت", "روز مرخصی", "گروه", "منطقه", "شیفت", "نام و نام‌خانوادگی", "ردیف"]
+    headers_rtl = ["نوع", "وضعیت", "روز مرخصی", term_group or "گروه", term_region or "منطقه", "شیفت", "نام و نام‌خانوادگی", "ردیف"]
     table_data = [[Paragraph(fa(h), style_head) for h in headers_rtl]]
 
     def _name(r):
