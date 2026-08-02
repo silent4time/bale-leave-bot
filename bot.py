@@ -183,7 +183,14 @@ async def on_message(message: Message):
     text = message.content.strip()
 
     if text.startswith("/start"):
-        await handle_start(message, author, text)
+        try:
+            await handle_start(message, author, text)
+        except Exception:
+            logger.exception("خطا در /start برای %s", getattr(author, "id", None))
+            try:
+                await message.reply("خطایی رخ داد. دوباره /start را بزنید یا به مدیر اطلاع دهید.")
+            except Exception:
+                pass
         return
 
     state = states.get_state(author.id)
@@ -220,21 +227,31 @@ async def on_message(message: Message):
         return
 
     # هدایت به منوی نقش
-    if db_user.get("is_admin"):
-        await handle_admin_menu(message, author, text)
-        return
-    if db_user.get("is_shift_lead"):
-        await handle_shift_lead_menu(message, author, db_user, text)
-        return
-    if db_user.get("is_senior") or db_user.get("role") == "snr":
-        await handle_senior_menu(message, author, db_user, text)
-        return
-    if db_user.get("approved"):
-        await handle_user_menu(message, author, db_user, text)
-        return
-    await message.reply(
-        "هنوز در انتظار تایید هستید. پس از تعیین نقش و گروه می‌توانید از منو استفاده کنید."
-    )
+    try:
+        if db_user.get("is_admin"):
+            await handle_admin_menu(message, author, text)
+            return
+        if db_user.get("is_shift_lead"):
+            await handle_shift_lead_menu(message, author, db_user, text)
+            return
+        if db_user.get("is_senior") or db_user.get("role") == "snr":
+            await handle_senior_menu(message, author, db_user, text)
+            return
+        if db_user.get("approved"):
+            await handle_user_menu(message, author, db_user, text)
+            return
+        await message.reply(
+            "هنوز در انتظار تایید هستید. پس از تعیین نقش و گروه می‌توانید از منو استفاده کنید."
+        )
+    except Exception:
+        logger.exception("خطا در پردازش منو text=%r user=%s", text, author.id)
+        try:
+            await message.reply(
+                "خطا در پردازش دکمه. دوباره /start را بزنید.",
+                components=await menu_with_terms(db_user),
+            )
+        except Exception:
+            pass
 
 
 async def handle_start(message: Message, author, text: str):
@@ -355,7 +372,7 @@ async def finalize_registration(message: Message, author, token):
             await message.reply(
                 f"✅ ثبت‌نام شما تکمیل شد.\nنقش: مسئول شیفت (سرگروه مناطق){shift_txt}\n"
                 f"مناطق تحت مدیریت: {', '.join(names) or '-'}",
-                components=kb.shift_lead_menu(),
+                components=await menu_with_terms(db_user),
             )
             return
         if invite and invite.get("role") and invite.get("group_id"):
@@ -607,7 +624,7 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
             states.clear_state(author.id)
             await message.reply(
                 f"✅ مدیریت به کاربر {to_uid} منتقل شد. شما دیگر مدیر نیستید.",
-                components=kb.user_menu(),
+                components=await menu_with_terms(db_user) if db_user else kb.user_menu(),
             )
         except ValueError as e:
             await message.reply(f"{fa_error(e)}\nدوباره شناسه را وارد کنید یا از منو خارج شوید.")
@@ -624,7 +641,7 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
             states.clear_state(author.id)
             await message.reply(
                 f"✅ نقش مسئول شیفت به کاربر {to_uid} منتقل شد.",
-                components=kb.user_menu(),
+                components=await menu_with_terms(db_user) if db_user else kb.user_menu(),
             )
         except ValueError as e:
             await message.reply(f"{fa_error(e)}\nدوباره شناسه را وارد کنید.")
@@ -660,7 +677,11 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
             # fallback مستقیم
             await run_db(db.set_setting, "term_region", name)
         states.clear_state(author.id)
-        await message.reply(f"✅ عنوان منطقه کاری: «{name}»", components=await menu_with_terms(await run_db(db.get_user, author.id)))
+        u = await run_db(db.get_user, author.id)
+        await message.reply(
+            f"✅ واژه منطقه به «{name}» تغییر کرد.\nمنوی جدید با /start هم هماهنگ می‌شود.",
+            components=await menu_with_terms(u),
+        )
         return True
 
     if action == "set_term_group":
@@ -673,7 +694,11 @@ async def handle_stateful_text(message: Message, author, text: str, state: dict)
         except Exception:
             await run_db(db.set_setting, "term_group", name)
         states.clear_state(author.id)
-        await message.reply(f"✅ عنوان گروه کاری: «{name}»", components=await menu_with_terms(await run_db(db.get_user, author.id)))
+        u = await run_db(db.get_user, author.id)
+        await message.reply(
+            f"✅ واژه گروه به «{name}» تغییر کرد.\nمنوی جدید با /start هم هماهنگ می‌شود.",
+            components=await menu_with_terms(u),
+        )
         return True
 
     if action == "set_max_shift_leads":
@@ -1225,7 +1250,7 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
             await message.reply("صف مرخصی ارشدهای مناطق شما خالی است.")
         return
 
-    if text in ((await _terms())[2]["lead_groups"], kb.LEAD_BTN_GROUPS):
+    if text in (L["lead_groups"], kb.LEAD_BTN_GROUPS):
         lines = []
         all_groups = []
         for rid in region_ids:
@@ -1334,7 +1359,7 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
         )
         return
 
-    await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=kb.shift_lead_menu())
+    await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=await menu_with_terms(db_user))
 
 
 # ==========================================================================
@@ -1442,7 +1467,7 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
         await show_status(message, db_user)
         return
 
-    await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=kb.senior_menu())
+    await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=await menu_with_terms(db_user))
 
 
 
@@ -1690,7 +1715,7 @@ async def handle_user_menu(message: Message, author, db_user: dict, text: str):
     if text == kb.USER_BTN_STATUS:
         await show_status(message, db_user)
         return
-    await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=kb.user_menu())
+    await message.reply("لطفاً از دکمه‌های منو استفاده کنید.", components=await menu_with_terms(db_user) if db_user else kb.user_menu())
 
 
 async def show_status(message: Message, db_user: dict):
@@ -1864,8 +1889,11 @@ async def _term_group() -> str:
 
 
 async def menu_with_terms(db_user: dict):
-    tr, tg, _ = await _terms()
-    return await menu_with_terms(db_user, tr, tg)
+    if not db_user:
+        return kb.user_menu()
+    tr = await _term_region()
+    tg = await _term_group()
+    return kb.menu_for_user(db_user, tr, tg)
 
 
 async def _terms():
