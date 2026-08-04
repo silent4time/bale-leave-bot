@@ -38,6 +38,22 @@ async def run_db(func, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
 
+
+def filter_members_for_viewer(users: list, viewer: dict) -> list:
+    """مسئول شیفت فقط ارشد/تکنسین/اپراتور را می‌بیند — نه مسئول شیفت و نه مدیر."""
+    if not users:
+        return []
+    if viewer and viewer.get("is_shift_lead") and not viewer.get("is_admin"):
+        out = []
+        for u in users:
+            if u.get("is_admin") or u.get("is_shift_lead"):
+                continue
+            # فقط snr / tech / op (و نقش‌های عادی عضو)
+            out.append(u)
+        return out
+    return list(users)
+
+
 def allowed_add_roles(db_user: dict) -> list:
     """نقش‌هایی که این کاربر مجاز است اضافه کند."""
     if not db_user:
@@ -1446,21 +1462,17 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
                     continue
                 seen.add(u["user_id"])
                 users_acc.append(u)
+        # مسئول شیفت: فقط ارشد، تکنسین، اپراتور (بدون مسئول شیفت/مدیر)
+        users_acc = filter_members_for_viewer(users_acc, db_user)
         if not users_acc:
-            await message.reply("عضوی در مناطق شما نیست.")
+            await message.reply("عضوی (ارشد/تکنسین/اپراتور) در مناطق شما نیست.")
             return
         mode = await run_db(db.get_calendar_mode)
         cfg = await run_db(db.get_shift_config) if mode == "shift" else None
         letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
         await message.reply(
-            f"اعضای مناطق شما ({len(users_acc)} نفر):",
+            f"اعضای مناطق شما ({len(users_acc)} نفر) — ارشد، تکنسین و اپراتور:",
             components=kb.all_users_keyboard(users_acc, True, letters=letters),
-        )
-        return
-        mode = await run_db(db.get_calendar_mode)
-        await message.reply(
-            "اعضای مناطق شما:\n" + "\n".join(lines),
-            components=kb.all_users_keyboard(users_acc, mode == "shift"),
         )
         return
 
