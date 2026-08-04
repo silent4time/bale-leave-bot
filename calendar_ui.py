@@ -19,10 +19,10 @@ STATUS_ICON = {"pending": "🕓", "reviewing": "🔍", "approved": "✅"}
 
 # رنگ‌نمای روز (API بله رنگ پس‌زمینه دکمه ندارد → ایموجی رنگی)
 DAY_TYPE_EMOJI = {
-    "morning": "🟢",      # صبح‌کاری
-    "afternoon": "🟡",    # عصرکاری
-    "night": "🔵",        # شب‌کاری
-    "rest": "🔴",         # استراحت / تعطیل
+    "morning": "🟢︎",
+    "afternoon": "🟡︎",
+    "night": "🔵︎",
+    "rest": "🔴︎",
 }
 DAY_TYPE_LEGEND = (
     "🟢صبح  🟡عصر  🔵شب  🔴استراحت/تعطیل  |  ★مرخصی شما  ●دیگران  ☑انتخاب"
@@ -99,41 +99,44 @@ def build_calendar(
 
     for day in range(1, ndays + 1):
         date_str = jalali.parse_date_str(year, month, day)
-        # فقط شماره روز + یک ایموجی رنگی کوچک (بدون ص۱ و …)
         dtype = day_types.get(date_str)
         color = DAY_TYPE_EMOJI.get(dtype, "") if dtype else ""
-        # ترتیب: علامت مرخصی + رنگ + شماره  →  مثال: ★🟢12  یا  ●🟡5  یا  🟢12
         num = str(day)
 
         if date_str < today_str:
-            mark = "·"
-            label = f"{mark}{color}{num}"
+            label = f"{num}{color}"
             cb = f"dayinfo:{date_str}" if date_str in approved_others or date_str in own_status else "noop"
         elif interactive and date_str in to_submit:
-            label = f"☑{color}{num}"
+            label = f"✓{num}{color}"
             cb = f"pick:{year}:{month}:{day}"
         elif interactive and date_str in to_cancel:
-            label = f"🗑{color}{num}"
+            label = f"×{num}{color}"
             cb = f"pick:{year}:{month}:{day}"
         elif date_str in own_status:
-            icon = STATUS_ICON.get(own_status[date_str], "")
-            # ★ مرخصی خود + وضعیت + رنگ + روز
-            label = f"★{icon}{color}{num}"
+            st = own_status[date_str]
+            if st == "approved":
+                mark = "★"
+            elif st == "pending":
+                mark = "…"
+            elif st == "reviewing":
+                mark = "?"
+            else:
+                mark = "★"
+            label = f"{mark}{num}{color}"
             if interactive:
                 cb = f"pick:{year}:{month}:{day}"
             else:
                 cb = f"dayinfo:{date_str}"
         elif date_str in approved_others:
             n = approved_others[date_str]
-            # ● یا ●N برای مرخصی دیگران
-            dot = "●" if n == 1 else f"●{n}"
-            label = f"{dot}{color}{num}"
+            mark = "•" if n == 1 else f"•{n}"
+            label = f"{mark}{num}{color}"
             if interactive:
                 cb = f"pick:{year}:{month}:{day}"
             else:
                 cb = f"dayinfo:{date_str}"
         else:
-            label = f"{color}{num}" if color else num
+            label = f"{num}{color}"
             if interactive:
                 cb = f"pick:{year}:{month}:{day}"
             else:
@@ -194,9 +197,6 @@ def build_calendar(
 
 def legend_text() -> str:
     return (
-        "راهنما:\n"
-        "☑ انتخاب برای ثبت    🗑 انتخاب برای لغو\n"
-        "★ مرخصی خودتان    🕓 موقت    🔍 بررسی    ✅ تایید\n"
-        "● مرخصی تاییدشده دیگران (برای دیدن نام بزنید)\n"
-        "˙ روز گذشته — ماه‌های آینده بدون محدودیت"
+        "فرمت: شماره+رنگ  |  🟢صبح 🟡عصر 🔵شب 🔴استراحت\n"
+        "★مرخصی شما  •دیگران  ✓ثبت  ×لغو"
     )
