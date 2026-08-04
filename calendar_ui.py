@@ -25,7 +25,7 @@ DAY_TYPE_EMOJI = {
     "rest": "🔴",         # استراحت / تعطیل
 }
 DAY_TYPE_LEGEND = (
-    "🟢 صبح‌کاری   🟡 عصرکاری   🔵 شب‌کاری   🔴 استراحت/تعطیل"
+    "🟢صبح  🟡عصر  🔵شب  🔴استراحت/تعطیل  |  ★مرخصی شما  ●دیگران  ☑انتخاب"
 )
 
 
@@ -99,36 +99,41 @@ def build_calendar(
 
     for day in range(1, ndays + 1):
         date_str = jalali.parse_date_str(year, month, day)
-        # رنگ نوع روز + شماره روز (کوتاه؛ محدودیت کاراکتر دکمه)
+        # فقط شماره روز + یک ایموجی رنگی کوچک (بدون ص۱ و …)
         dtype = day_types.get(date_str)
         color = DAY_TYPE_EMOJI.get(dtype, "") if dtype else ""
-        base = f"{color}{day}" if color else f"{day}"
+        # ترتیب: علامت مرخصی + رنگ + شماره  →  مثال: ★🟢12  یا  ●🟡5  یا  🟢12
+        num = str(day)
 
         if date_str < today_str:
-            label = f"·{base}"
+            mark = "·"
+            label = f"{mark}{color}{num}"
             cb = f"dayinfo:{date_str}" if date_str in approved_others or date_str in own_status else "noop"
         elif interactive and date_str in to_submit:
-            label = f"☑{base}"
+            label = f"☑{color}{num}"
             cb = f"pick:{year}:{month}:{day}"
         elif interactive and date_str in to_cancel:
-            label = f"🗑{base}"
+            label = f"🗑{color}{num}"
             cb = f"pick:{year}:{month}:{day}"
         elif date_str in own_status:
             icon = STATUS_ICON.get(own_status[date_str], "")
-            label = f"★{icon}{base}"
+            # ★ مرخصی خود + وضعیت + رنگ + روز
+            label = f"★{icon}{color}{num}"
             if interactive:
                 cb = f"pick:{year}:{month}:{day}"
             else:
                 cb = f"dayinfo:{date_str}"
         elif date_str in approved_others:
             n = approved_others[date_str]
-            label = f"●{base}" if n == 1 else f"●{n}{base}"
+            # ● یا ●N برای مرخصی دیگران
+            dot = "●" if n == 1 else f"●{n}"
+            label = f"{dot}{color}{num}"
             if interactive:
                 cb = f"pick:{year}:{month}:{day}"
             else:
                 cb = f"dayinfo:{date_str}"
         else:
-            label = base
+            label = f"{color}{num}" if color else num
             if interactive:
                 cb = f"pick:{year}:{month}:{day}"
             else:
@@ -140,6 +145,7 @@ def build_calendar(
             row += 1
             col = 0
 
+    
     if col != 0:
         row += 1
 
