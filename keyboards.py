@@ -597,10 +597,11 @@ def all_users_keyboard(users, shift_mode: bool, letters: list = None) -> InlineK
             shift_part = f"شیفت {si}"
         else:
             shift_part = "بدون شیفت"
-        # نام | شیفت | منطقه | گروه (نقش حذف شد — با گروه یکسان/زائد)
+        # نام | شیفت | منطقه | گروه | نقش (نقش برای مسئول شیفت/مدیر/ارشد ضروری است)
         parts = [name, shift_part, region]
         if group:
             parts.append(group)
+        parts.append(role)
         label = " | ".join(parts)
         if len(label) > 64:
             label = label[:61] + "…"
