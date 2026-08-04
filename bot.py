@@ -1430,21 +1430,10 @@ async def handle_shift_lead_menu(message: Message, author, db_user: dict, text: 
         return
 
     if text in (L["lead_groups"], kb.LEAD_BTN_GROUPS):
-        mode = await run_db(db.get_calendar_mode)
-        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
-        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
-        lines = []
-        all_groups = []
-        for rid in region_ids:
-            groups = await run_db(db.list_groups, rid)
-            all_groups.extend(groups)
-            for g in groups:
-                lines.append(await format_group_line(g, letters))
-        if not lines:
-            await message.reply("در مناطق شما گروهی نیست.")
+        if not region_ids:
+            await message.reply("منطقه‌ای به شما تخصیص داده نشده.")
             return
-        await message.reply("گروه‌های مناطق شما:\n" + "\n".join(lines),
-                            components=kb.groups_edit_keyboard(all_groups) if all_groups else None)
+        await show_regions_then_groups(message, region_ids)
         return
 
     if text == kb.LEAD_BTN_MEMBERS:
@@ -1630,16 +1619,9 @@ async def handle_senior_menu(message: Message, author, db_user: dict, text: str)
         if not region_id:
             await message.reply("منطقه کاری شما مشخص نیست.")
             return
-        groups = await run_db(db.list_member_groups, region_id)
-        if not groups:
-            await message.reply("گروهی در منطقه نیست.")
-            return
-        mode = await run_db(db.get_calendar_mode)
-        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
-        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
-        lines = [await format_group_line(g, letters) for g in groups]
-        await message.reply("گروه‌های منطقه:\n" + "\n".join(lines))
+        await show_regions_then_groups(message, [region_id])
         return
+
 
     if text in (L["snr_calendar"], kb.SNR_BTN_CALENDAR):
         await show_calendar(message, db_user)
@@ -1753,6 +1735,61 @@ async def format_group_line(g: dict, letters: list = None) -> str:
         elif idxs:
             shift_txt = f" — شیفت {','.join(str(i) for i in idxs)}"
     return f"• {name} — {rname}{shift_txt} (ظرفیت {g.get('max_concurrent', '-')})"
+
+
+
+async def show_regions_then_groups(message_or_cb, region_ids: list, *, title: str = None):
+    """مرحله ۱: لیست شیشه‌ای مناطق؛ با کلیک، گروه‌های همان منطقه."""
+    regions = []
+    for rid in region_ids:
+        r = await run_db(db.get_region, rid)
+        if r:
+            regions.append(r)
+    if not regions:
+        # try load all regions for admin if ids empty was intentional
+        text = "منطقه‌ای برای نمایش وجود ندارد."
+        if hasattr(message_or_cb, "reply"):
+            await message_or_cb.reply(text)
+        else:
+            await message_or_cb.message.reply(text)
+        return
+    tr, tg, _ = await _terms()
+    title = title or f"ابتدا {tr} را انتخاب کنید؛ سپس {tg}‌های همان {tr} نمایش داده می‌شود:"
+    markup = kb.regions_pick_for_groups_keyboard(regions, "myg_reg")
+    if hasattr(message_or_cb, "reply") and not hasattr(message_or_cb, "message"):
+        await message_or_cb.reply(title, components=markup)
+    else:
+        # Message object from callback.message
+        try:
+            await message_or_cb.reply(title, components=markup)
+        except Exception:
+            await _ui_reply(message_or_cb, title, markup)
+
+
+async def show_groups_of_region(callback_or_msg, region_id: int):
+    region = await run_db(db.get_region, region_id)
+    if not region:
+        if hasattr(callback_or_msg, "message"):
+            await _ui_reply(callback_or_msg, "منطقه پیدا نشد.")
+        else:
+            await callback_or_msg.reply("منطقه پیدا نشد.")
+        return
+    groups = await run_db(db.list_groups, region_id)
+    tr, tg, _ = await _terms()
+    if not groups:
+        text = f"در {tr} «{region['name']}» هنوز {tg}‌ای نیست."
+        nav = kb.nav_row_keyboard(back_callback="myg_list", show_main=True)
+        if hasattr(callback_or_msg, "data"):
+            await _ui_reply(callback_or_msg, text, nav)
+        else:
+            await callback_or_msg.reply(text, components=nav)
+        return
+    text = f"{tg}‌های {tr} «{region['name']}» — برای تنظیم روی هر مورد بزنید:"
+    markup = kb.groups_edit_keyboard(groups, back_callback="myg_list")
+    if hasattr(callback_or_msg, "data"):
+        await _ui_reply(callback_or_msg, text, markup)
+    else:
+        await callback_or_msg.reply(text, components=markup)
 
 
 async def show_all_users(message: Message):
@@ -2467,6 +2504,37 @@ async def on_callback(callback: CallbackQuery):
             await cb_bcast_reset(callback, data)
         elif data.startswith("bcast_ack:"):
             await cb_bcast_reset(callback, data)
+        elif data == "lead_cfg_groups":
+            rids = await run_db(db.list_shift_lead_region_ids, callback.user.id) or []
+            if not rids:
+                await _ui_reply(callback, "منطقه‌ای به شما تخصیص داده نشده.")
+            else:
+                await show_regions_then_groups(callback.message, rids)
+        elif data.startswith("myg_reg:"):
+            rid = int(data.split(":")[1])
+            # دسترسی
+            viewer = await run_db(db.get_user, callback.user.id)
+            if not viewer:
+                return
+            ok = viewer.get("is_admin") or await run_db(db.can_manage_region, callback.user.id, rid)
+            if viewer.get("is_senior") and viewer.get("region_id") == rid:
+                ok = True
+            if not ok:
+                await _ui_reply(callback, "به این منطقه دسترسی ندارید.")
+            else:
+                await show_groups_of_region(callback, rid)
+        elif data == "myg_list":
+            viewer = await run_db(db.get_user, callback.user.id)
+            if not viewer:
+                return
+            if viewer.get("is_admin"):
+                regs = await run_db(db.list_regions) or []
+                rids = [r["id"] for r in regs]
+            elif viewer.get("is_shift_lead"):
+                rids = await run_db(db.list_shift_lead_region_ids, callback.user.id) or []
+            else:
+                rids = [viewer["region_id"]] if viewer.get("region_id") else []
+            await show_regions_then_groups(callback.message, rids)
         elif data.startswith("addvia:"):
             await cb_addvia(callback, data)
         elif data.startswith("invrole:"):

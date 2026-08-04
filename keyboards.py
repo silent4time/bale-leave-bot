@@ -410,7 +410,27 @@ def slot_select_keyboard(labels, callback_prefix: str) -> InlineKeyboardMarkup:
     return kb
 
 
-def groups_edit_keyboard(groups) -> InlineKeyboardMarkup:
+def regions_pick_for_groups_keyboard(regions, prefix: str = "myg_reg") -> InlineKeyboardMarkup:
+    """مرحله ۱: انتخاب منطقه برای دیدن/تنظیم گروه‌ها."""
+    kb = InlineKeyboardMarkup()
+    row = 1
+    for r in regions:
+        kb.add(
+            InlineKeyboardButton(
+                text=f"🗺 {r.get('name') or r.get('id')}",
+                callback_data=f"{prefix}:{r['id']}",
+            ),
+            row=row,
+        )
+        row += 1
+    kb.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data="nav_back_admin"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=row)
+    return kb
+
+
+def groups_edit_keyboard(groups, *, back_callback: str = "nav_back_admin") -> InlineKeyboardMarkup:
+
     kb = InlineKeyboardMarkup()
     row = 1
     for g in groups:
@@ -430,6 +450,8 @@ def groups_edit_keyboard(groups) -> InlineKeyboardMarkup:
             row=row,
         )
         row += 1
+    kb.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data=back_callback), row=80)
+    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=81)
     return kb
 
 
