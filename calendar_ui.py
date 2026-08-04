@@ -99,44 +99,39 @@ def build_calendar(
 
     for day in range(1, ndays + 1):
         date_str = jalali.parse_date_str(year, month, day)
-        dtype = day_types.get(date_str)
-        color = DAY_TYPE_EMOJI.get(dtype, "") if dtype else ""
-        num = str(day)
+        # فقط شماره روز + حرف کوتاه شیفت (بدون / و بدون عدد اسلات) — مثال: 23ص
+        short = ""
+        if date_str in shift_short_labels and shift_short_labels[date_str]:
+            raw = str(shift_short_labels[date_str]).replace("|", "/").strip()
+            # فقط بخش حروفی اول (ص1 → ص ، ع2 → ع ، رست → ر)
+            short = _shift_letter_only(raw)
+        base = f"{day}{short}" if short else f"{day}"
 
         if date_str < today_str:
-            label = f"{num}{color}"
+            label = f"·{base}"
             cb = f"dayinfo:{date_str}" if date_str in approved_others or date_str in own_status else "noop"
         elif interactive and date_str in to_submit:
-            label = f"✓{num}{color}"
+            label = f"☑{base}"
             cb = f"pick:{year}:{month}:{day}"
         elif interactive and date_str in to_cancel:
-            label = f"×{num}{color}"
+            label = f"🗑{base}"
             cb = f"pick:{year}:{month}:{day}"
         elif date_str in own_status:
-            st = own_status[date_str]
-            if st == "approved":
-                mark = "★"
-            elif st == "pending":
-                mark = "…"
-            elif st == "reviewing":
-                mark = "?"
-            else:
-                mark = "★"
-            label = f"{mark}{num}{color}"
+            icon = STATUS_ICON.get(own_status[date_str], "")
+            label = f"★{icon}{base}"
             if interactive:
                 cb = f"pick:{year}:{month}:{day}"
             else:
                 cb = f"dayinfo:{date_str}"
         elif date_str in approved_others:
             n = approved_others[date_str]
-            mark = "•" if n == 1 else f"•{n}"
-            label = f"{mark}{num}{color}"
+            label = f"●{base}" if n == 1 else f"●{n}{base}"
             if interactive:
                 cb = f"pick:{year}:{month}:{day}"
             else:
                 cb = f"dayinfo:{date_str}"
         else:
-            label = f"{num}{color}"
+            label = base
             if interactive:
                 cb = f"pick:{year}:{month}:{day}"
             else:
@@ -197,6 +192,6 @@ def build_calendar(
 
 def legend_text() -> str:
     return (
-        "فرمت: شماره+رنگ  |  🟢صبح 🟡عصر 🔵شب 🔴استراحت\n"
-        "★مرخصی شما  •دیگران  ✓ثبت  ×لغو"
+        "فرمت روز: شماره+حرف شیفت (مثلاً 23ص)\n"
+        "☑ثبت  🗑لغو  ★مرخصی شما  ●دیگران  ·روز گذشته"
     )
