@@ -17,6 +17,37 @@ import jalali
 
 STATUS_ICON = {"pending": "🕓", "reviewing": "🔍", "approved": "✅"}
 
+# رنگ‌نمای روز (API بله رنگ پس‌زمینه دکمه ندارد → ایموجی رنگی)
+DAY_TYPE_EMOJI = {
+    "morning": "🟢",      # صبح‌کاری
+    "afternoon": "🟡",    # عصرکاری
+    "night": "🔵",        # شب‌کاری
+    "rest": "🔴",         # استراحت / تعطیل
+}
+DAY_TYPE_LEGEND = (
+    "🟢 صبح‌کاری   🟡 عصرکاری   🔵 شب‌کاری   🔴 استراحت/تعطیل"
+)
+
+
+def classify_slot_label(name: str = "", short: str = "") -> str:
+    """تشخیص نوع روز از نام کامل یا علامت کوتاه اسلات."""
+    name = (name or "").strip()
+    short = (short or "").strip().replace("|", "/").split("/")[0]
+    text = f"{name} {short}"
+    low = text.lower()
+    # استراحت اول
+    if any(k in text for k in ("رست", "استراحت", "آف")) or "off" in low:
+        return "rest"
+    if short.startswith(("ر", "R", "r")):
+        return "rest"
+    if "صبح" in text or short.startswith("ص"):
+        return "morning"
+    if any(k in text for k in ("عصر", "ظهر")) or short.startswith("ع"):
+        return "afternoon"
+    if "شب" in text or short.startswith("ش"):
+        return "night"
+    return "unknown"
+
 
 def build_calendar(
     year: int,
@@ -26,21 +57,23 @@ def build_calendar(
     selection: dict,
     shift_short_labels: dict = None,
     approved_others: dict = None,
+    day_types: dict = None,
     *,
     interactive: bool = True,
     show_actions: bool = True,
 ) -> InlineKeyboardMarkup:
     """
-    own_status: {date_str: status} مرخصی‌های خود کاربر
+    own_status: {date_str: status}
     selection:  {"to_submit": set, "to_cancel": set}
-    shift_short_labels: {date_str: 'ص1'}
-    approved_others: {date_str: count} تعداد مرخصی تاییدشده دیگران در آن روز
-    interactive: اگر False فقط نمایش (برای مدیر/مسئول شیفت بدون ثبت)
+    shift_short_labels: {date_str: 'ص1'}  — فقط برای راهنما؛ نمایش اصلی با رنگ
+    day_types: {date_str: morning|afternoon|night|rest}
+    approved_others: {date_str: count}
     """
     to_submit = selection.get("to_submit", set()) if selection else set()
     to_cancel = selection.get("to_cancel", set()) if selection else set()
     shift_short_labels = shift_short_labels or {}
     approved_others = approved_others or {}
+    day_types = day_types or {}
 
     kb = InlineKeyboardMarkup()
     row = 1
@@ -66,15 +99,13 @@ def build_calendar(
 
     for day in range(1, ndays + 1):
         date_str = jalali.parse_date_str(year, month, day)
-        # خانه بزرگ‌تر و خوانا: «۱۲/ص۱» یا فقط روز
-        if date_str in shift_short_labels and shift_short_labels[date_str]:
-            short = str(shift_short_labels[date_str]).replace("|", "/").strip()
-            base = f"{day}/{short}"
-        else:
-            base = f"{day}"
+        # رنگ نوع روز + شماره روز (کوتاه؛ محدودیت کاراکتر دکمه)
+        dtype = day_types.get(date_str)
+        color = DAY_TYPE_EMOJI.get(dtype, "") if dtype else ""
+        base = f"{color}{day}" if color else f"{day}"
 
         if date_str < today_str:
-            label = f"˙{base}"
+            label = f"·{base}"
             cb = f"dayinfo:{date_str}" if date_str in approved_others or date_str in own_status else "noop"
         elif interactive and date_str in to_submit:
             label = f"☑{base}"
@@ -84,14 +115,12 @@ def build_calendar(
             cb = f"pick:{year}:{month}:{day}"
         elif date_str in own_status:
             icon = STATUS_ICON.get(own_status[date_str], "")
-            # ★ = مرخصی خود شخص
             label = f"★{icon}{base}"
             if interactive:
                 cb = f"pick:{year}:{month}:{day}"
             else:
                 cb = f"dayinfo:{date_str}"
         elif date_str in approved_others:
-            # مرخصی تاییدشده دیگران — نمایش می‌شود ولی در حالت تعاملی قابل انتخاب برای درخواست خود
             n = approved_others[date_str]
             label = f"●{base}" if n == 1 else f"●{n}{base}"
             if interactive:

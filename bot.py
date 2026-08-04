@@ -2065,41 +2065,83 @@ def _shift_slot_index(cfg: dict, target_shift_index: int, date_str: str) -> int:
     )
 
 
+def _iran_official_holiday(date_str: str) -> bool:
+    """تعطیلات رسمی ثابت شمسی (نمونهٔ پرکاربرد؛ قابل گسترش)."""
+    # MM-DD
+    try:
+        _, m, d = date_str.split("-")
+        md = f"{int(m):02d}-{int(d):02d}"
+    except Exception:
+        return False
+    fixed = {
+        "01-01", "01-02", "01-03", "01-04",  # نوروز
+        "01-12",  # روز جمهوری اسلامی
+        "01-13",  # طبیعت
+        "11-22",  # پیروزی انقلاب
+        "12-29",  # ملی شدن نفت
+    }
+    return md in fixed
+
+
 async def shift_labels_for_month(db_user: dict, year: int, month: int) -> dict:
+    """برچسب کوتاه روز برای شیفت کاربر — برای سازگاری."""
+    labels_map, _ = await shift_day_meta_for_month(db_user, year, month)
+    return labels_map
+
+
+async def shift_day_meta_for_month(db_user: dict, year: int, month: int):
+    """
+    برمی‌گرداند: (shift_short_labels, day_types)
+    day_types: morning|afternoon|night|rest
+    """
     mode = await run_db(db.get_calendar_mode)
+    ndays = jalali.days_in_jalali_month(year, month)
+    short_map = {}
+    type_map = {}
+
+    if mode == "workday":
+        # فقط پنجشنبه، جمعه و تعطیل رسمی = قرمز
+        for day in range(1, ndays + 1):
+            ds = jalali.parse_date_str(year, month, day)
+            wd = jalali.jalali_weekday(year, month, day)  # 0=شنبه ... 5=پنجشنبه 6=جمعه
+            if wd in (5, 6) or _iran_official_holiday(ds):
+                type_map[ds] = "rest"
+        return short_map, type_map
+
     if mode != "shift":
-        return {}
+        return short_map, type_map
+
     cfg = await run_db(db.get_shift_config)
     if not cfg:
-        return {}
+        return short_map, type_map
     si = db_user.get("shift_index")
     if si is None:
-        # مدیر بدون شیفت: شیفت ۰ را برای نمایش الگوی روزها نشان بده
         si = 0
     si = int(si)
-    ndays = jalali.days_in_jalali_month(year, month)
-    out = {}
     labels = cfg.get("labels") or []
     if not labels:
-        return {}
+        return short_map, type_map
     for day in range(1, ndays + 1):
         ds = jalali.parse_date_str(year, month, day)
         idx = _shift_slot_index(cfg, si, ds)
         if 0 <= idx < len(labels):
-            short = labels[idx].get("short") or labels[idx].get("name") or ""
-            out[ds] = str(short).replace("|", "/").strip()
-    return out
+            lab = labels[idx] or {}
+            name = str(lab.get("name") or "")
+            short = str(lab.get("short") or name or "").replace("|", "/").strip()
+            short_map[ds] = short
+            type_map[ds] = calendar_ui.classify_slot_label(name, short)
+    return short_map, type_map
 
 
 async def build_calendar_view(
     db_user: dict, year: int, month: int, *, region_id: int = None, interactive: bool = True
 ):
     own_status = await own_status_for_month(db_user["user_id"], year, month)
-    shift_labels = await shift_labels_for_month(db_user, year, month)
+    shift_labels, day_types = await shift_day_meta_for_month(db_user, year, month)
     sel = states.get_selection(db_user["user_id"], year, month) if interactive else {"to_submit": set(), "to_cancel": set()}
     others = await approved_others_for_month(db_user, year, month, region_id)
     keyboard = calendar_ui.build_calendar(
-        year, month, today_str(), own_status, sel, shift_labels, others,
+        year, month, today_str(), own_status, sel, shift_labels, others, day_types,
         interactive=interactive, show_actions=interactive,
     )
     title = "📅 تقویم مرخصی"
@@ -2107,7 +2149,11 @@ async def build_calendar_view(
         region = await run_db(db.get_region, region_id)
         if region:
             title += f" — {region['name']}"
-    text = title + "\n" + calendar_ui.legend_text()
+    mode = await run_db(db.get_calendar_mode)
+    legend = calendar_ui.legend_text()
+    if mode == "workday":
+        legend = "🔴 پنجشنبه، جمعه و تعطیل رسمی"
+    text = title + "\n" + legend
     return text, keyboard
 
 
