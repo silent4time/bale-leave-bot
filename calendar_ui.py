@@ -17,6 +17,29 @@ import jalali
 
 STATUS_ICON = {"pending": "🕓", "reviewing": "🔍", "approved": "✅"}
 
+def _shift_letter_only(raw: str) -> str:
+    """فقط حرف نوع شیفت: ص1→ص ، ع2→ع ، ش1→ش ، ر2→ر."""
+    if not raw:
+        return ""
+    s = str(raw).strip().replace("|", "/").split("/")[0].strip()
+    if "صبح" in s:
+        return "ص"
+    if "عصر" in s or "ظهر" in s:
+        return "ع"
+    if "شب" in s:
+        return "ش"
+    if "رست" in s or "استراحت" in s:
+        return "ر"
+    letters = "".join(
+        ch for ch in s
+        if not ch.isdigit() and not ch.isspace() and ch not in "-_/."
+    )
+    if not letters:
+        return ""
+    return letters[0]
+
+
+
 # رنگ‌نمای روز (API بله رنگ پس‌زمینه دکمه ندارد → ایموجی رنگی)
 DAY_TYPE_EMOJI = {
     "morning": "🟢︎",
