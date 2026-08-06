@@ -81,6 +81,13 @@ def today_str() -> str:
 STATUS_FA = {"pending": "ثبت موقت (در انتظار تایید)", "reviewing": "در حال بررسی", "approved": "تایید شده"}
 
 _ERROR_FA_MAP = {
+    "only primary admin can add co-admin": "فقط مدیر اصلی می‌تواند مدیر دوم معرفی کند.",
+    "only primary admin can remove co-admin": "فقط مدیر اصلی می‌تواند مدیر دوم را عزل کند.",
+    "cannot remove primary admin": "نمی‌توان مدیر اصلی را عزل کرد.",
+    "max two admins reached": "سقف دو مدیر پر است.",
+    "already admin": "این فرد هم‌اکنون مدیر است.",
+    "cannot add self as co-admin": "نمی‌توانید خودتان را مدیر دوم کنید.",
+
     "not a shift lead": "این فرد هنوز به‌عنوان مسئول شیفت منصوب نشده — ابتدا باید با «انتصاب مسئول شیفت جدید» منصوب شود.",
     "source is not a shift lead": "شما مسئول شیفت نیستید، نمی‌توانید نقش را منتقل کنید.",
     "target user not found": "کاربر مقصد پیدا نشد.",
@@ -360,6 +367,25 @@ async def finalize_registration(message: Message, author, token):
         return
 
     if token:
+        inv_purpose = await run_db(db.get_setting, f"invite_purpose_{token}")
+        if inv_purpose == "add_co_admin":
+            invite = await run_db(db.get_invite, token)
+            creator = invite.get("created_by") if invite else None
+            try:
+                if not creator:
+                    raise ValueError("target user not found")
+                await run_db(db.add_co_admin, int(creator), uid)
+                try:
+                    await run_db(db.increment_invite_use, token)
+                except Exception:
+                    pass
+                await message.reply(
+                    "🎉 شما به‌عنوان مدیر دوم ربات منصوب شدید.",
+                    components=await menu_with_terms(await run_db(db.get_user, uid)),
+                )
+            except Exception as e:
+                await message.reply(fa_error(e))
+            return
         invite = await run_db(db.get_invite, token)
         # دعوت مسئول شیفت (چند منطقه، بدون گروه زیرمنطقه)
         if invite and (invite.get("is_shift_lead") or invite.get("role") == "lead"):
@@ -538,6 +564,42 @@ async def handle_contact_shared(message: Message, author, contact):
             await client.send_message(target_uid, "🎉 شما مسئول شیفت شدید.", components=await menu_with_terms(nu) if nu else None)
         except Exception:
             logger.exception("notify new lead")
+        return
+
+    # --- معرفی مدیر دوم از مخاطب ---
+    if purpose == "add_co_admin":
+        if not await run_db(db.is_primary_admin, author.id):
+            await message.reply("فقط مدیر اصلی می‌تواند مدیر دوم معرفی کند.")
+            return
+        if target_user is None:
+            await message.reply(
+                "مخاطب به حساب بله وصل نشد. از لینک یا لیست اعضا استفاده کنید.",
+                components=await menu_with_terms(db_user),
+            )
+            return
+        target_uid = target_user.id
+        await run_db(
+            db.touch_user_bale_info, target_uid,
+            getattr(target_user, "first_name", None) or shared_first,
+            getattr(target_user, "username", None),
+        )
+        try:
+            await run_db(db.add_co_admin, author.id, target_uid)
+            await message.reply(
+                f"✅ «{name or target_uid}» به‌عنوان مدیر دوم منصوب شد.",
+                components=await menu_with_terms(db_user),
+            )
+            try:
+                nu = await run_db(db.get_user, target_uid)
+                await client.send_message(
+                    target_uid,
+                    "🎉 شما به‌عنوان مدیر دوم ربات منصوب شدید.",
+                    components=await menu_with_terms(nu) if nu else None,
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            await message.reply(fa_error(e), components=await menu_with_terms(db_user))
         return
 
     # --- انتصاب مسئول شیفت از مخاطب ---
@@ -2773,6 +2835,50 @@ async def on_callback(callback: CallbackQuery):
                 f"👔 مسئولان شیفت ({len(leads)} از سقف {cap}):",
                 kb.shift_leads_manage_keyboard(leads),
             )
+        elif data == "settings_admins":
+            viewer = await run_db(db.get_user, callback.user.id)
+            if not viewer or not viewer.get("is_admin"):
+                await _ui_reply(callback, "فقط مدیر.")
+            else:
+                nav_push(callback.user.id, "settings")
+                primary = await run_db(db.get_primary_admin_id)
+                ids = await run_db(db.list_admin_ids)
+                rows = []
+                for aid in ids:
+                    u = await run_db(db.get_user, aid)
+                    name = display_name(u) if u else str(aid)
+                    rows.append({
+                        "user_id": aid,
+                        "name": name,
+                        "is_primary": primary is not None and int(aid) == int(primary),
+                    })
+                is_prim = await run_db(db.is_primary_admin, callback.user.id)
+                await _ui_reply(
+                    callback,
+                    "👥 مدیریت مدیران (حداکثر ۲ نفر)\n"
+                    "مدیر دوم را فقط مدیر اصلی معرفی می‌کند.\n"
+                    "مدیر دوم نمی‌تواند مدیر اصلی را عزل کند.",
+                    kb.admins_manage_keyboard(is_primary=bool(is_prim), admin_rows=rows),
+                )
+        elif data == "admin_add_co":
+            viewer = await run_db(db.get_user, callback.user.id)
+            if not viewer or not await run_db(db.is_primary_admin, callback.user.id):
+                await _ui_reply(callback, "فقط مدیر اصلی می‌تواند مدیر دوم معرفی کند.")
+            elif (await run_db(db.count_admins)) >= 2:
+                await _ui_reply(callback, "سقف دو مدیر پر است.")
+            else:
+                await _ui_reply(
+                    callback,
+                    "معرفی مدیر دوم — روش را انتخاب کنید:",
+                    kb.succession_method_keyboard("add_co_admin"),
+                )
+        elif data.startswith("admin_del_co:"):
+            tid = int(data.split(":")[1])
+            try:
+                await run_db(db.remove_co_admin, callback.user.id, tid)
+                await _ui_reply(callback, "✅ مدیر دوم عزل شد.")
+            except Exception as e:
+                await _ui_reply(callback, fa_error(e) if "fa_error" in dir() else str(e))
         elif data == "settings_replaceadmin":
             await _ui_reply(
                 callback,
@@ -2809,6 +2915,13 @@ async def on_callback(callback: CallbackQuery):
             _, gid, color = data.split(":", 2)
             await run_db(db.update_group_color, int(gid), color)
             await callback.message.reply(f"✅ رنگ گروه به {color} تغییر کرد.")
+        elif data.startswith("coadmin_pick:"):
+            tid = int(data.split(":")[1])
+            try:
+                await run_db(db.add_co_admin, callback.user.id, tid)
+                await _ui_reply(callback, "✅ مدیر دوم منصوب شد.")
+            except Exception as e:
+                await _ui_reply(callback, fa_error(e))
         elif data.startswith("appoint_sl_pick:"):
             target = int(data.split(":")[1])
             regions = await run_db(db.list_regions)
@@ -2991,6 +3104,22 @@ async def on_callback(callback: CallbackQuery):
             uid = int(data.split(":")[1])
             if not await viewer_can_manage_user_or_own_group(callback.user.id, uid):
                 await callback.message.reply("شما اجازه‌ی حذف این عضو را ندارید.")
+                return
+            target = await run_db(db.get_user, uid)
+            if target and target.get("is_admin"):
+                primary = await run_db(db.get_primary_admin_id)
+                if primary is not None and int(uid) == int(primary):
+                    await callback.message.reply("❌ نمی‌توان مدیر اصلی را حذف کرد.")
+                    return
+                if not await run_db(db.is_primary_admin, callback.user.id):
+                    await callback.message.reply("❌ فقط مدیر اصلی می‌تواند مدیر دوم را حذف کند.")
+                    return
+                # عزل نقش ادمین به‌جای حذف کامل از سیستم
+                try:
+                    await run_db(db.remove_co_admin, callback.user.id, uid)
+                    await callback.message.reply("✅ نقش مدیر دوم برداشته شد.")
+                except Exception as e:
+                    await callback.message.reply(fa_error(e))
                 return
             info = await run_db(db.remove_user_from_system, uid)
             await callback.message.reply(
@@ -3455,11 +3584,29 @@ async def cb_succvia(callback: CallbackQuery, data: str):
         return
     method, purpose = parts[1], parts[2]
     viewer = await run_db(db.get_user, callback.user.id)
-    if purpose in ("replace_admin", "appoint_lead") and not (viewer and viewer.get("is_admin")):
+    if purpose in ("replace_admin", "appoint_lead", "add_co_admin") and not (viewer and viewer.get("is_admin")):
         await _ui_reply(callback, "فقط مدیر.")
+        return
+    if purpose == "add_co_admin" and not (viewer and await run_db(db.is_primary_admin, callback.user.id)):
+        await _ui_reply(callback, "فقط مدیر اصلی می‌تواند مدیر دوم معرفی کند.")
         return
     if purpose == "transfer_lead" and not (viewer and viewer.get("is_shift_lead")):
         await _ui_reply(callback, "فقط مسئول شیفت.")
+        return
+    if method == "list" and purpose == "add_co_admin":
+        users = await run_db(db.list_all_active_users) or []
+        users = [u for u in users if not u.get("is_admin")]
+        mode = await run_db(db.get_calendar_mode)
+        cfg = await run_db(db.get_shift_config) if mode == "shift" else None
+        letters = shift.shift_letters(cfg["shift_count"]) if cfg else []
+        if not users:
+            await _ui_reply(callback, "عضوی برای انتخاب نیست.")
+            return
+        await _ui_reply(
+            callback,
+            "عضو را برای مدیر دوم انتخاب کنید:",
+            kb.pick_member_keyboard(users, letters, "coadmin_pick"),
+        )
         return
     if method == "list" and purpose == "appoint_lead":
         users = await run_db(db.list_all_active_users) or []
@@ -3486,6 +3633,20 @@ async def cb_succvia(callback: CallbackQuery, data: str):
         return
     if method == "link":
         token = secrets.token_urlsafe(8)
+        if purpose == "add_co_admin":
+            await run_db(
+                db.create_invite, token, "admin", None, callback.user.id,
+                None, 0, None, 1, [],
+            )
+            await run_db(db.set_setting, f"invite_purpose_{token}", "add_co_admin")
+            try:
+                me = await client.get_me()
+                uname = getattr(me, "username", None) or "BOT"
+                link = f"https://ble.ir/{uname}?start={token}"
+            except Exception:
+                link = f"/start {token}"
+            await _ui_reply(callback, f"🔗 لینک معرفی مدیر دوم:\n{link}")
+            return
         if purpose == "appoint_lead":
             await run_db(
                 db.create_invite, token, "lead", None, callback.user.id,

@@ -309,7 +309,7 @@ def broadcast_options_keyboard(with_btn: bool = True) -> InlineKeyboardMarkup:
 
 
 def succession_method_keyboard(purpose: str) -> InlineKeyboardMarkup:
-    """purpose: replace_admin | transfer_lead | appoint_lead"""
+    """purpose: replace_admin | transfer_lead | appoint_lead | add_co_admin"""
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton(text="📱 انتخاب از دفترچه تلفن", callback_data=f"succvia:contact:{purpose}"), row=1)
     if purpose == "appoint_lead":
@@ -745,9 +745,44 @@ def settings_keyboard(current_mode: str, *, is_admin: bool = True, shift_count: 
     row += 1
     kb.add(InlineKeyboardButton(text=L["settings_terms"], callback_data="settings_terms"), row=row)
     row += 1
-    kb.add(InlineKeyboardButton(text="🔁 جایگزینی مدیر", callback_data="settings_replaceadmin"), row=row)
+    kb.add(InlineKeyboardButton(text="👥 مدیریت مدیران", callback_data="settings_admins"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🔁 واگذاری نقش مدیر اصلی", callback_data="settings_replaceadmin"), row=row)
     return kb
 
+
+
+def admins_manage_keyboard(*, is_primary: bool, admin_rows: list) -> InlineKeyboardMarkup:
+    """مدیریت دو مدیر — مدیر دوم فقط توسط مدیر اصلی اضافه/حذف می‌شود."""
+    kb = InlineKeyboardMarkup()
+    row = 1
+    for a in admin_rows:
+        mark = "⭐ مدیر اصلی" if a.get("is_primary") else "👤 مدیر دوم"
+        name = a.get("name") or str(a.get("user_id"))
+        kb.add(
+            InlineKeyboardButton(text=f"{mark}: {name}", callback_data=f"admin_info:{a['user_id']}"),
+            row=row,
+        )
+        row += 1
+    if is_primary:
+        if len(admin_rows) < 2:
+            kb.add(InlineKeyboardButton(text="➕ معرفی مدیر دوم", callback_data="admin_add_co"), row=row)
+            row += 1
+        # حذف فقط برای مدیر دوم
+        for a in admin_rows:
+            if not a.get("is_primary"):
+                kb.add(
+                    InlineKeyboardButton(
+                        text=f"🗑 عزل مدیر دوم ({a.get('name') or a['user_id']})",
+                        callback_data=f"admin_del_co:{a['user_id']}",
+                    ),
+                    row=row,
+                )
+                row += 1
+    kb.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data="nav_back_admin"), row=row)
+    row += 1
+    kb.add(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="nav_main"), row=row)
+    return kb
 
 
 def lead_settings_keyboard() -> InlineKeyboardMarkup:

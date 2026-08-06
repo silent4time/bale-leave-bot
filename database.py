@@ -653,10 +653,8 @@ def touch_user_bale_info(user_id: int, bale_first_name, bale_username):
 
 def try_claim_admin(user_id: int):
     """
-    اولین نفری که ثبت‌نام کامل می‌کند مدیر می‌شود. برخلاف قبل، دیگر منطقه/گروه
-    پیش‌فرضی برایش ساخته نمی‌شود — طبق روند جدید، مدیر باید اول تنظیمات
-    تقویم/شیفت را کامل کند و بعد خودش مناطق کاری (و گروه‌های هرکدام) را بسازد.
-    خروجی: (claimed: bool, None)
+    اولین نفری که ثبت‌نام کامل می‌کند مدیر اصلی می‌شود.
+    primary_admin_id در settings ذخیره می‌شود. حداکثر ۲ مدیر (اصلی + دوم).
     """
     con = sqlite3.connect(config.DB_PATH, isolation_level=None, timeout=10)
     con.row_factory = sqlite3.Row
@@ -672,6 +670,11 @@ def try_claim_admin(user_id: int):
         )
         con.execute("COMMIT")
         inv_user(user_id)
+        # مدیر اصلی
+        try:
+            set_setting("primary_admin_id", str(user_id))
+        except Exception:
+            pass
         return True, None
     except Exception:
         con.execute("ROLLBACK")
@@ -680,10 +683,86 @@ def try_claim_admin(user_id: int):
         con.close()
 
 
+
 def list_admin_ids():
     with _conn() as con:
         rows = con.execute("SELECT user_id FROM users WHERE is_admin = 1").fetchall()
         return [r["user_id"] for r in rows]
+
+
+def get_primary_admin_id() -> Optional[int]:
+    """شناسه مدیر اصلی (اولین مدیر). مدیر دوم نمی‌تواند او را عزل کند."""
+    raw = get_setting("primary_admin_id")
+    if raw and str(raw).strip().isdigit():
+        pid = int(str(raw).strip())
+        # هنوز ادمین باشد
+        with _conn() as con:
+            row = con.execute(
+                "SELECT user_id FROM users WHERE user_id = ? AND is_admin = 1", (pid,)
+            ).fetchone()
+            if row:
+                return pid
+    ids = list_admin_ids()
+    if not ids:
+        return None
+    # بازیابی: کوچک‌ترین user_id یا اولین
+    pid = ids[0]
+    try:
+        set_setting("primary_admin_id", str(pid))
+    except Exception:
+        pass
+    return pid
+
+
+def is_primary_admin(user_id: int) -> bool:
+    pid = get_primary_admin_id()
+    return pid is not None and int(user_id) == int(pid)
+
+
+def count_admins() -> int:
+    return len(list_admin_ids())
+
+
+def add_co_admin(by_uid: int, target_uid: int) -> dict:
+    """معرفی مدیر دوم فقط توسط مدیر اصلی. سقف: ۲ مدیر."""
+    if int(by_uid) == int(target_uid):
+        raise ValueError("cannot add self as co-admin")
+    if not is_primary_admin(by_uid):
+        raise ValueError("only primary admin can add co-admin")
+    if count_admins() >= 2:
+        raise ValueError("max two admins reached")
+    with _conn() as con:
+        dst = con.execute("SELECT * FROM users WHERE user_id = ?", (target_uid,)).fetchone()
+        if not dst:
+            raise ValueError("target user not found")
+        if dst["is_admin"]:
+            raise ValueError("already admin")
+        con.execute(
+            "UPDATE users SET is_admin = 1, approved = 1, profile_complete = 1 WHERE user_id = ?",
+            (target_uid,),
+        )
+    inv_user(target_uid)
+    return {"primary": by_uid, "co_admin": target_uid}
+
+
+def remove_co_admin(by_uid: int, target_uid: int) -> dict:
+    """عزل مدیر دوم فقط توسط مدیر اصلی. مدیر اصلی قابل عزل نیست."""
+    primary = get_primary_admin_id()
+    if primary is None:
+        raise ValueError("no primary admin")
+    if int(target_uid) == int(primary):
+        raise ValueError("cannot remove primary admin")
+    if not is_primary_admin(by_uid):
+        raise ValueError("only primary admin can remove co-admin")
+    with _conn() as con:
+        dst = con.execute("SELECT * FROM users WHERE user_id = ?", (target_uid,)).fetchone()
+        if not dst or not dst["is_admin"]:
+            raise ValueError("target is not admin")
+        con.execute("UPDATE users SET is_admin = 0 WHERE user_id = ?", (target_uid,))
+    inv_user(target_uid)
+    return {"removed": target_uid, "by": by_uid}
+
+
 
 
 def list_seniors_by_region():
@@ -2100,4 +2179,13 @@ def replace_admin(from_uid: int, to_uid: int) -> dict:
 
     inv_user(from_uid)
     inv_user(to_uid)
+    # اگر واگذاری از مدیر اصلی بود، گیرنده مدیر اصلی می‌شود
+    try:
+        if str(get_setting("primary_admin_id") or "") == str(from_uid) or is_primary_admin(from_uid):
+            set_setting("primary_admin_id", str(to_uid))
+    except Exception:
+        try:
+            set_setting("primary_admin_id", str(to_uid))
+        except Exception:
+            pass
     return {"from_uid": from_uid, "to_uid": to_uid}
