@@ -40,15 +40,30 @@ async def run_db(func, *args, **kwargs):
 
 
 def filter_members_for_viewer(users: list, viewer: dict) -> list:
-    """مسئول شیفت فقط ارشد/تکنسین/اپراتور را می‌بیند — نه مسئول شیفت و نه مدیر."""
+    """مسئول شیفت: ارشد/تکنسین/اپراتور — مدیر بدون نقش عملیاتی و سایر مسئولان شیفت حذف می‌شوند.
+    مدیر دومی که خودش عضو عملیاتی منطقه است، در لیست می‌ماند.
+    """
     if not users:
         return []
     if viewer and viewer.get("is_shift_lead") and not viewer.get("is_admin"):
         out = []
         for u in users:
-            if u.get("is_admin") or u.get("is_shift_lead"):
+            # مسئول شیفت دیگر (بدون نقش عضو ساده)
+            if u.get("is_shift_lead") and not (
+                u.get("is_senior") or u.get("group_id") or u.get("role") in ("tech", "op", "snr")
+            ):
                 continue
-            # فقط snr / tech / op (و نقش‌های عادی عضو)
+            # مدیر خالص بدون نقش عملیاتی
+            if u.get("is_admin") and not (
+                u.get("is_shift_lead")
+                or u.get("is_senior")
+                or u.get("group_id")
+                or u.get("role") in ("tech", "op", "snr", "lead")
+            ):
+                continue
+            if u.get("is_shift_lead") and not u.get("is_admin"):
+                # مسئول شیفت خالص
+                continue
             out.append(u)
         return out
     return list(users)
@@ -380,7 +395,7 @@ async def finalize_registration(message: Message, author, token):
                 except Exception:
                     pass
                 await message.reply(
-                    "🎉 شما به‌عنوان مدیر دوم ربات منصوب شدید.",
+                    "🎉 شما مدیر دوم شدید.\nنقش عملیاتی قبلی‌تان حفظ شده و به تنظیمات مدیر هم دسترسی دارید (به‌جز عزل مدیر اصلی).",
                     components=await menu_with_terms(await run_db(db.get_user, uid)),
                 )
             except Exception as e:
@@ -586,14 +601,14 @@ async def handle_contact_shared(message: Message, author, contact):
         try:
             await run_db(db.add_co_admin, author.id, target_uid)
             await message.reply(
-                f"✅ «{name or target_uid}» به‌عنوان مدیر دوم منصوب شد.",
+                f"✅ «{name or target_uid}» مدیر دوم شد (نقش عملیاتی فعلی‌اش حفظ شد).",
                 components=await menu_with_terms(db_user),
             )
             try:
                 nu = await run_db(db.get_user, target_uid)
                 await client.send_message(
                     target_uid,
-                    "🎉 شما به‌عنوان مدیر دوم ربات منصوب شدید.",
+                    "🎉 شما مدیر دوم شدید.\nنقش عملیاتی قبلی‌تان حفظ شده و به تنظیمات مدیر هم دسترسی دارید (به‌جز عزل مدیر اصلی).",
                     components=await menu_with_terms(nu) if nu else None,
                 )
             except Exception:
@@ -1342,13 +1357,35 @@ async def handle_admin_menu(message: Message, author, text: str):
         await handle_shift_lead_menu(message, author, db_user, text)
         return
 
-    if text in (kb.LEAD_BTN_MY_SHIFT, kb.LEAD_BTN_TRANSFER):
+    if text in (kb.LEAD_BTN_MY_SHIFT, kb.LEAD_BTN_TRANSFER, kb.LEAD_BTN_MEMBERS, kb.LEAD_BTN_GROUPS):
         db_user = await run_db(db.get_user, author.id)
         if not db_user or not db_user.get("is_shift_lead"):
             await message.reply("این گزینه فقط برای مسئول شیفت است.")
             return
         await handle_shift_lead_menu(message, author, db_user, text)
         return
+
+    # مدیر دوم با نقش ارشد
+    db_user = await run_db(db.get_user, author.id)
+    if db_user and (db_user.get("is_senior") or db_user.get("role") == "snr"):
+        _tr, _tg, L2 = await _terms()
+        snr_labels = {
+            L2.get("snr_queue"), L2.get("snr_members"), L2.get("snr_groups"),
+            L2.get("snr_calendar"), L2.get("snr_report"),
+            getattr(kb, "SNR_BTN_STATUS", None), getattr(kb, "SNR_BTN_PENDING", None),
+            getattr(kb, "SNR_BTN_QUEUE", None), getattr(kb, "SNR_BTN_MEMBERS", None),
+            getattr(kb, "SNR_BTN_GROUPS", None), getattr(kb, "SNR_BTN_CALENDAR", None),
+            getattr(kb, "SNR_BTN_REPORT", None),
+        }
+        if text in snr_labels:
+            await handle_senior_menu(message, author, db_user, text)
+            return
+    if db_user and db_user.get("group_id") and not db_user.get("is_shift_lead") and not (
+        db_user.get("is_senior") or db_user.get("role") == "snr"
+    ):
+        if text in (kb.USER_BTN_CALENDAR, kb.USER_BTN_STATUS):
+            await handle_user_menu(message, author, db_user, text)
+            return
 
     if text == kb.ADMIN_BTN_MEMBERS:
         await show_all_users(message)

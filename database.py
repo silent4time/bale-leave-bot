@@ -724,7 +724,9 @@ def count_admins() -> int:
 
 
 def add_co_admin(by_uid: int, target_uid: int) -> dict:
-    """معرفی مدیر دوم فقط توسط مدیر اصلی. سقف: ۲ مدیر."""
+    """معرفی مدیر دوم فقط توسط مدیر اصلی. سقف: ۲ مدیر.
+    نقش عملیاتی فعلی (مسئول شیفت/ارشد/تکنسین/اپراتور) حفظ می‌شود؛ فقط پرچم is_admin اضافه می‌شود.
+    """
     if int(by_uid) == int(target_uid):
         raise ValueError("cannot add self as co-admin")
     if not is_primary_admin(by_uid):
@@ -1035,14 +1037,20 @@ def list_all_user_ids_for_broadcast() -> list:
 
 
 def list_all_active_users(region_id: Optional[int] = None):
-
+    """اعضای فعال؛ مدیر دوم با نقش عملیاتی (مسئول/ارشد/گروه) هم در لیست می‌ماند."""
     q = """
         SELECT u.*, g.name AS group_name, g.color AS group_color,
                r.name AS region_name
         FROM users u
         LEFT JOIN groups g ON g.id = u.group_id
         LEFT JOIN regions r ON r.id = u.region_id
-        WHERE u.approved = 1 AND u.is_admin = 0
+        WHERE u.approved = 1 AND (
+            IFNULL(u.is_admin, 0) = 0
+            OR IFNULL(u.is_shift_lead, 0) = 1
+            OR IFNULL(u.is_senior, 0) = 1
+            OR u.group_id IS NOT NULL
+            OR IFNULL(u.role, '') IN ('tech', 'op', 'snr', 'lead')
+        )
     """
     params: list = []
     if region_id is not None:

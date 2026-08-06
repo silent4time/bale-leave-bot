@@ -143,8 +143,14 @@ def _add_menu_two_col(kb: MenuKeyboardMarkup, labels: list) -> None:
         row += 1
 
 
-def admin_menu(also_shift_lead: bool = False, term_region: str = "منطقه کاری", term_group: str = "گروه کاری") -> MenuKeyboardMarkup:
-    """منوی مدیر."""
+def admin_menu(
+    also_shift_lead: bool = False,
+    also_senior: bool = False,
+    also_member: bool = False,
+    term_region: str = "منطقه کاری",
+    term_group: str = "گروه کاری",
+) -> MenuKeyboardMarkup:
+    """منوی مدیر — در صورت مدیر دوم با نقش عملیاتی، دکمه‌های همان نقش هم اضافه می‌شود."""
     L = term_labels(term_region, term_group)
     kb = MenuKeyboardMarkup()
     labels = [
@@ -161,7 +167,13 @@ def admin_menu(also_shift_lead: bool = False, term_region: str = "منطقه ک�
     ]
     if also_shift_lead:
         labels.insert(1, LEAD_BTN_QUEUE)
-        labels.extend([LEAD_BTN_MY_SHIFT, LEAD_BTN_TRANSFER])
+        labels.extend([LEAD_BTN_MY_SHIFT, LEAD_BTN_TRANSFER, L["lead_groups"], LEAD_BTN_MEMBERS])
+    elif also_senior:
+        labels.insert(1, L["snr_queue"])
+        labels.extend([L["snr_members"], L["snr_groups"], SNR_BTN_STATUS])
+    elif also_member:
+        labels.insert(1, USER_BTN_CALENDAR)
+        labels.append(USER_BTN_STATUS)
     _add_menu_two_col(kb, labels)
     return kb
 
@@ -235,6 +247,16 @@ def menu_for_user(db_user: dict, term_region: str = "منطقه کاری", term_
     if db_user.get("is_admin"):
         return admin_menu(
             also_shift_lead=bool(db_user.get("is_shift_lead")),
+            also_senior=bool(
+                (db_user.get("is_senior") or db_user.get("role") == "snr")
+                and not db_user.get("is_shift_lead")
+            ),
+            also_member=bool(
+                db_user.get("group_id")
+                and not db_user.get("is_shift_lead")
+                and not (db_user.get("is_senior") or db_user.get("role") == "snr")
+                and db_user.get("role") in ("tech", "op", None, "")
+            ),
             term_region=term_region,
             term_group=term_group,
         )
