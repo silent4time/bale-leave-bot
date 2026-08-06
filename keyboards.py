@@ -312,9 +312,12 @@ def succession_method_keyboard(purpose: str) -> InlineKeyboardMarkup:
     """purpose: replace_admin | transfer_lead | appoint_lead | add_co_admin"""
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton(text="📱 انتخاب از دفترچه تلفن", callback_data=f"succvia:contact:{purpose}"), row=1)
-    if purpose == "appoint_lead":
+    if purpose in ("appoint_lead", "add_co_admin"):
         kb.add(InlineKeyboardButton(text="👥 انتخاب از لیست اعضا", callback_data=f"succvia:list:{purpose}"), row=2)
-        kb.add(InlineKeyboardButton(text="🔗 ساخت لینک دعوت مسئول شیفت", callback_data=f"succvia:link:{purpose}"), row=3)
+        if purpose == "appoint_lead":
+            kb.add(InlineKeyboardButton(text="🔗 ساخت لینک دعوت مسئول شیفت", callback_data=f"succvia:link:{purpose}"), row=3)
+        else:
+            kb.add(InlineKeyboardButton(text="🔗 ساخت لینک دعوت مدیر دوم", callback_data=f"succvia:link:{purpose}"), row=3)
     else:
         kb.add(InlineKeyboardButton(text="🔗 ساخت لینک واگذاری", callback_data=f"succvia:link:{purpose}"), row=2)
     kb.add(InlineKeyboardButton(text="↩️ بازگشت", callback_data="nav_back_admin"), row=4)
