@@ -2560,6 +2560,8 @@ async def on_callback(callback: CallbackQuery):
             await cb_succvia(callback, data)
         elif data.startswith("bcast_reset:"):
             await cb_bcast_reset(callback, data)
+        elif data == "restart_start":
+            await cb_restart_start(callback)
         elif data.startswith("bcast_ack:"):
             await cb_bcast_reset(callback, data)
         elif data == "lead_cfg_groups":
@@ -3344,7 +3346,7 @@ async def cb_resetbot(callback: CallbackQuery, data: str):
 
 
 async def cb_bcast_reset(callback: CallbackQuery, data: str):
-    """ریست سمت کاربر: پاک‌سازی حالت موقت + منوی تازه (پس از آپدیت ربات)."""
+    """ریست سمت کاربر: پاک حالت + تلاش برای پاک کردن پیام‌های ربات + دکمه شروع مجدد."""
     uid = callback.user.id
     try:
         states.clear_state(uid)
@@ -3355,25 +3357,93 @@ async def cb_bcast_reset(callback: CallbackQuery, data: str):
         cache.inv_user(uid)
     except Exception:
         pass
-    db_user = await run_db(db.get_user, uid)
-    menu = await menu_with_terms(db_user) if db_user else None
+
+    # تلاش برای حذف پیام همگانی (پاک‌سازی جزئی تاریخچه از سمت ربات)
     try:
-        await callback.message.edit(
-            "✅ ریست انجام شد.\nحالت موقت شما پاک شد. از منوی زیر استفاده کنید."
-        )
+        if hasattr(callback.message, "delete"):
+            await callback.message.delete()
+        elif hasattr(client, "delete_message"):
+            mid = getattr(callback.message, "message_id", None) or getattr(callback.message, "id", None)
+            chat = getattr(callback.message, "chat_id", None) or uid
+            if mid:
+                await client.delete_message(chat, mid)
+    except Exception:
+        try:
+            await callback.message.edit("✅ ریست شد. این پیام را می‌توانید نادیده بگیرید.")
+        except Exception:
+            pass
+
+    from bale import InlineKeyboardMarkup, InlineKeyboardButton
+    start_kb = InlineKeyboardMarkup()
+    start_kb.add(
+        InlineKeyboardButton(text="🚀 شروع مجدد ربات", callback_data="restart_start"),
+        row=1,
+    )
+    try:
+        me = await client.get_me()
+        uname = getattr(me, "username", None) or _bot_username.get("value")
+        if uname:
+            start_kb.add(
+                InlineKeyboardButton(
+                    text="🔗 باز کردن ربات از ابتدا",
+                    url=f"https://ble.ir/{uname}?start=fresh",
+                ),
+                row=2,
+            )
     except Exception:
         pass
-    if db_user and db_user.get("profile_complete"):
-        await callback.message.reply(
-            "منوی به‌روز:",
-            components=menu,
+
+    try:
+        await client.send_message(
+            uid,
+            "✅ ریست ربات انجام شد.\n"
+            "حالت موقت شما پاک شد.\n\n"
+            "برای شروع دوباره روی دکمه زیر بزنید.\n"
+            "(ربات نمی‌تواند کل تاریخچه چت را از دستگاه شما پاک کند؛ "
+            "در صورت تمایل می‌توانید چت را از منوی بله هم پاک کنید.)",
+            components=start_kb,
         )
-    else:
-        await callback.message.reply("لطفاً /start را بزنید.")
+    except Exception:
+        logger.exception("send restart prompt failed for %s", uid)
 
 
 async def cb_bcast_ack(callback: CallbackQuery, data: str):
     await cb_bcast_reset(callback, data)
+
+
+async def cb_restart_start(callback: CallbackQuery):
+    """شروع مجدد مثل /start پس از ریست."""
+    uid = callback.user.id
+    try:
+        states.clear_state(uid)
+        states.clear_selection(uid)
+    except Exception:
+        pass
+    # شبیه‌سازی /start با یک پیام ساده
+    class _Msg:
+        def __init__(self, cb):
+            self._cb = cb
+            self.author = cb.user
+            self.content = "/start"
+        async def reply(self, text, components=None, **kwargs):
+            try:
+                if components is not None:
+                    await self._cb.message.reply(text, components=components)
+                else:
+                    await self._cb.message.reply(text)
+            except Exception:
+                await client.send_message(self._cb.user.id, text, components=components)
+
+    try:
+        await handle_start(_Msg(callback), callback.user, "/start")
+    except Exception:
+        logger.exception("restart_start failed")
+        db_user = await run_db(db.get_user, uid)
+        if db_user and db_user.get("profile_complete"):
+            await _ui_reply(callback, "ربات آماده است.", await menu_with_terms(db_user))
+        else:
+            await _ui_reply(callback, "لطفاً دستور /start را ارسال کنید.")
+
 
 
 async def cb_succvia(callback: CallbackQuery, data: str):
